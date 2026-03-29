@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Settings, Activity, LineChart, FileText, ChevronLeft, ChevronRight, Eye, Grid, Table, Copy, Check } from 'lucide-react';
+import { Upload, Settings, Activity, LineChart, FileText, ChevronLeft, ChevronRight, Eye, Grid, Table, Copy, Check, AlertTriangle } from 'lucide-react';
 
 // --- ΥΠΟΛΟΓΙΣΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ---
 
@@ -133,7 +133,37 @@ function getDerivative(data, dt) {
   return out;
 }
 
-// --- ΣΥΝΑΡΤΗΣΕΙΣ HEATMAP (JET COLORMAP) ---
+// Υπολογισμός Mean και Std Dev για 2D arrays (Συχνότητες x Καταγραφές)
+function calcStats(data2D, selectedRecords, selCount) {
+  if (!data2D || data2D.length === 0) return { mean: [], std: [] };
+  const len = data2D.length;
+  const recs = data2D[0].length;
+  const mean = Array(len).fill(0);
+  const std = Array(len).fill(0);
+
+  if (selCount === 0) return { mean, std };
+
+  for (let i = 0; i < len; i++) {
+    let sum = 0;
+    for (let r = 0; r < recs; r++) {
+      if (selectedRecords[r]) sum += data2D[i][r];
+    }
+    mean[i] = sum / selCount;
+  }
+
+  if (selCount > 1) {
+    for (let i = 0; i < len; i++) {
+      let sumSq = 0;
+      for (let r = 0; r < recs; r++) {
+        if (selectedRecords[r]) sumSq += Math.pow(data2D[i][r] - mean[i], 2);
+      }
+      std[i] = Math.sqrt(sumSq / (selCount - 1));
+    }
+  }
+  return { mean, std };
+}
+
+// --- ΣΥΝΑΡΤΗΣΕΙΣ HEATMAP ---
 function valueToColor(val, min, max, logScale) {
   let v;
   if (logScale) {
@@ -153,8 +183,8 @@ function valueToColor(val, min, max, logScale) {
 
 const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, setActiveRecord }) => {
   const [hmParams, setHmParams] = useState({
-    domain: 'SDOF', // 'SDOF' or 'FFT'
-    component: 'Ratio', // 'Ratio', 'Z', 'X', 'Y'
+    domain: 'SDOF',
+    component: 'Comb', // 'H1', 'H2', 'Comb', 'Z', 'X', 'Y'
     maxF: 20,
     logScale: true
   });
@@ -168,16 +198,18 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
     let freqs = hmParams.domain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs;
     let data2D = [];
     
-    if (hmParams.domain === 'SDOF') {
-      if (hmParams.component === 'Ratio') data2D = computedData.hv;
-      else if (hmParams.component === 'Z') data2D = computedData.sdofV;
-      else if (hmParams.component === 'X') data2D = computedData.sdofH1;
-      else if (hmParams.component === 'Y') data2D = computedData.sdofH2;
+    if (['H1', 'H2', 'Comb'].includes(hmParams.component)) {
+      data2D = computedData.ratios[hmParams.domain][hmParams.component].data;
     } else {
-      if (hmParams.component === 'Ratio') data2D = computedData.hvFFT;
-      else if (hmParams.component === 'Z') data2D = computedData.fftV;
-      else if (hmParams.component === 'X') data2D = computedData.fftH1;
-      else if (hmParams.component === 'Y') data2D = computedData.fftH2;
+      if (hmParams.domain === 'SDOF') {
+        if (hmParams.component === 'Z') data2D = computedData.sdofV;
+        else if (hmParams.component === 'X') data2D = computedData.sdofH1;
+        else if (hmParams.component === 'Y') data2D = computedData.sdofH2;
+      } else {
+        if (hmParams.component === 'Z') data2D = computedData.fftV;
+        else if (hmParams.component === 'X') data2D = computedData.fftH1;
+        else if (hmParams.component === 'Y') data2D = computedData.fftH2;
+      }
     }
 
     let height = 0;
@@ -188,7 +220,7 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
     
     const width = records;
 
-    if (width === 0 || height === 0) return;
+    if (width === 0 || height === 0 || !data2D || data2D.length === 0) return;
 
     canvasRef.current.width = width;
     canvasRef.current.height = height;
@@ -271,7 +303,9 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
             onChange={(e) => setHmParams({...hmParams, component: e.target.value})}
             className="border border-slate-300 rounded p-1 outline-none bg-white"
           >
-            <option value="Ratio">Λόγος H/V</option>
+            <option value="H1">Sx/Sv</option>
+            <option value="H2">Sy/Sv</option>
+            <option value="Comb">H/V</option>
             <option value="Z">Z (Vert)</option>
             <option value="X">X (Hor 1)</option>
             <option value="Y">Y (Hor 2)</option>
@@ -295,7 +329,6 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
       </div>
       
       <div className="flex-1 relative flex bg-white m-2 border border-slate-200 mt-0">
-         {/* Y-Axis Labels (Frequencies) */}
          <div className="w-12 relative p-1 text-[10px] text-slate-700 font-bold bg-slate-50 border-r border-slate-200">
             {[0, 0.25, 0.5, 0.75, 1].map(frac => {
                const val = hmParams.maxF * frac;
@@ -306,7 +339,6 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
                );
             })}
          </div>
-         {/* Canvas Area */}
          <div className="flex-1 relative cursor-crosshair" onClick={handleCanvasClick}>
            <canvas 
              ref={canvasRef} 
@@ -315,7 +347,6 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
            />
          </div>
       </div>
-      {/* X-Axis Labels (Records) */}
       <div className="h-6 relative w-full text-[10px] text-slate-700 font-bold px-12 mb-1">
          {[0, 0.25, 0.5, 0.75, 1].map(frac => {
             const numTicksX = records > 1 ? records - 1 : 1;
@@ -338,6 +369,7 @@ export default function App() {
   const [fileData, setFileData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
   const [params, setParams] = useState({
     nspec: 100,
@@ -354,7 +386,9 @@ export default function App() {
     chH1: 1,
     chH2: 2,
     penMinF: 0.5,
-    penMaxF: 10.0
+    penMaxF: 10.0,
+    penDomain: 'SDOF',
+    penRatio: 'Comb' // 'H1', 'H2', 'Comb'
   });
 
   const [selectedRecords, setSelectedRecords] = useState([]);
@@ -368,9 +402,9 @@ export default function App() {
   
   const [sortByPenalty, setSortByPenalty] = useState(false);
   const [tableDomain, setTableDomain] = useState('SDOF'); 
+  const [tableRatio, setTableRatio] = useState('Comb'); // 'H1', 'H2', 'Comb'
   const [tableCopied, setTableCopied] = useState(false);
 
-  // States για τους Cursors στα γραφήματα
   const [tsCursor, setTsCursor] = useState(null);
   const [chartCursor, setChartCursor] = useState(null);
   
@@ -389,6 +423,7 @@ export default function App() {
     if (!file) return;
     setFileName(file.name);
     setLoading(true);
+    setErrorMsg("");
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -396,9 +431,6 @@ export default function App() {
       try {
         const lines = text.split(/\r?\n/);
         
-        const recordsTokens = lines[3].trim().split(/[\s,]+/).filter(Boolean);
-        const records = parseInt(recordsTokens[recordsTokens.length - 1], 10);
-
         const trTokens = lines[9].trim().split(/[\s,]+/).filter(Boolean);
         const tr = parseFloat(trTokens[trTokens.length - 1]);
 
@@ -407,36 +439,80 @@ export default function App() {
 
         const npoints = Math.floor(tr / dt);
 
+        // Δυναμική ανίχνευση και υπολογισμός Record Index
+        const dataStartIndex = 22;
+        let actualDataStart = dataStartIndex;
+        let firstLineTokens = [];
+        
+        for (let i = dataStartIndex; i < Math.min(lines.length, dataStartIndex + 100); i++) {
+          const tokens = lines[i].trim().split(/[\s,]+/).filter(Boolean);
+          // Ελέγχουμε αν η γραμμή έχει αριθμούς
+          if (tokens.length > 2 && !isNaN(parseFloat(tokens[2]))) {
+            firstLineTokens = tokens;
+            actualDataStart = i;
+            break;
+          }
+        }
+
+        if (firstLineTokens.length === 0) {
+            throw new Error("Δεν βρέθηκαν έγκυρα αριθμητικά δεδομένα στο αρχείο.");
+        }
+
+        const columns = firstLineTokens.length;
+        // Ο ΤΥΠΟΣ ΠΟΥ ΖΗΤΗΘΗΚΕ: Record Index=(columns-2)/12 
+        const recordsFromData = Math.floor((columns - 2) / 12);
+
+        if (recordsFromData <= 0) {
+            throw new Error(`Αδυναμία υπολογισμού καταγραφών. Βρέθηκαν συνολικά ${columns} στήλες στο αρχείο.`);
+        }
+
+        const records = recordsFromData;
+        const channelsPerRecord = 12;
+        const leadingCols = 2;
+
         const sensorData = Array.from({ length: records }, () =>
-          Array.from({ length: 12 }, () => new Float32Array(npoints))
+          Array.from({ length: channelsPerRecord }, () => new Float32Array(npoints))
         );
 
-        const dataStartIndex = 22;
+        let parsedLinesCount = 0;
         for (let i = 0; i < npoints; i++) {
-          const lineIdx = dataStartIndex + i;
+          const lineIdx = actualDataStart + i;
           if (lineIdx >= lines.length) break;
           const tokens = lines[lineIdx].trim().split(/[\s,]+/).filter(Boolean);
-          if (tokens.length < 2 + 12 * records) continue;
+          
+          if (tokens.length < channelsPerRecord * records) continue; 
+          parsedLinesCount++;
 
-          let tIdx = 2;
+          let tIdx = leadingCols; 
           for (let rec = 0; rec < records; rec++) {
-            for (let ch = 0; ch < 12; ch++) {
+            for (let ch = 0; ch < channelsPerRecord; ch++) {
               let val = parseFloat(tokens[tIdx++]);
-              if (!isNaN(val) && ch < 12) {
+              if (!isNaN(val)) {
                 sensorData[rec][ch][i] = val;
               }
             }
           }
         }
 
-        setParams(p => ({ ...p, dt: dt }));
-        setFileData({ records, npoints, sensorData });
+        if (parsedLinesCount === 0) {
+            throw new Error("Το αρχείο είναι άδειο ή η δομή του δεν διαβάστηκε σωστά.");
+        }
+
+        setParams(p => {
+            let newParams = { ...p, dt: dt };
+            if (newParams.chV >= channelsPerRecord) newParams.chV = 0;
+            if (newParams.chH1 >= channelsPerRecord) newParams.chH1 = Math.min(1, channelsPerRecord - 1);
+            if (newParams.chH2 >= channelsPerRecord) newParams.chH2 = Math.min(2, channelsPerRecord - 1);
+            return newParams;
+        });
+
+        setFileData({ records, npoints, sensorData, channelsPerRecord });
         setSelectedRecords(Array(records).fill(true));
         setActiveRecord(0);
         setLoading(false);
       } catch (err) {
         console.error(err);
-        alert("Σφάλμα κατά την ανάγνωση του αρχείου. Ελέγξτε τη μορφή του.");
+        setErrorMsg("Σφάλμα: " + err.message);
         setLoading(false);
       }
     };
@@ -448,7 +524,7 @@ export default function App() {
 
     const timer = setTimeout(() => {
       const { records, sensorData } = fileData;
-      const { nspec, maxfre, dratio, dt, option, power, horGain, windowType, fftSmoothWindow, sdofInput, chV, chH1, chH2, penMinF, penMaxF } = params;
+      const { nspec, maxfre, dratio, dt, option, power, horGain, windowType, fftSmoothWindow, sdofInput, chV, chH1, chH2, penMinF, penMaxF, penDomain, penRatio } = params;
       
       const safeMaxFre = Number(maxfre) || 20;
       
@@ -458,13 +534,23 @@ export default function App() {
       const sdofV_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
       const sdofH1_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
       const sdofH2_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const hv = Array(nspec).fill(0).map(() => Array(records).fill(0));
+      
+      // SDOF Ratios
+      const hvH1 = Array(nspec).fill(0).map(() => Array(records).fill(0));
+      const hvH2 = Array(nspec).fill(0).map(() => Array(records).fill(0));
+      const hvComb = Array(nspec).fill(0).map(() => Array(records).fill(0));
+      const hvMain = Array(nspec).fill(0).map(() => Array(records).fill(0)); // Για το κεντρικό γράφημα (βάσει params.option)
       
       let fftFreqs = [];
       let fftV_arr = [];
       let fftH1_arr = [];
       let fftH2_arr = [];
-      let hvFFT = [];
+      
+      // FFT Ratios
+      let hvFFTH1 = [];
+      let hvFFTH2 = [];
+      let hvFFTComb = [];
+      let hvFFTMain = []; // Για το κεντρικό γράφημα
 
       for (let rec = 0; rec < records; rec++) {
         
@@ -481,7 +567,11 @@ export default function App() {
           fftV_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
           fftH1_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
           fftH2_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
-          hvFFT = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
+          
+          hvFFTH1 = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
+          hvFFTH2 = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
+          hvFFTComb = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
+          hvFFTMain = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
         }
 
         for (let i3 = 0; i3 < fftFreqs.length; i3++) {
@@ -493,13 +583,16 @@ export default function App() {
           fftH1_arr[i3][rec] = h1Amp;
           fftH2_arr[i3][rec] = h2Amp;
 
-          let valFFT = 0;
+          let v1 = 0, v2 = 0, vc = 0;
           if (vAmp > 0) {
-             if (option === 1) valFFT = Math.pow(h1Amp / vAmp, power);
-             else if (option === 2) valFFT = Math.pow(h2Amp / vAmp, power);
-             else if (option === 3) valFFT = Math.pow(Math.sqrt(h1Amp * h2Amp) / vAmp, power);
+             v1 = Math.pow(h1Amp / vAmp, power);
+             v2 = Math.pow(h2Amp / vAmp, power);
+             vc = Math.pow(Math.sqrt(h1Amp * h2Amp) / vAmp, power);
           }
-          hvFFT[i3][rec] = valFFT;
+          hvFFTH1[i3][rec] = v1;
+          hvFFTH2[i3][rec] = v2;
+          hvFFTComb[i3][rec] = vc;
+          hvFFTMain[i3][rec] = option === 1 ? v1 : (option === 2 ? v2 : vc);
         }
 
         const sdofV = sdofInput === 'acceleration' ? getDerivative(sensorData[rec][chV], dt) : sensorData[rec][chV];
@@ -518,66 +611,48 @@ export default function App() {
           sdofH1_arr[i3][rec] = h1;
           sdofH2_arr[i3][rec] = h2;
 
-          let valSDOF = 0;
+          let v1 = 0, v2 = 0, vc = 0;
           if (v > 0) {
-            if (option === 1) valSDOF = Math.pow(h1 / v, power);
-            else if (option === 2) valSDOF = Math.pow(h2 / v, power);
-            else if (option === 3) valSDOF = Math.pow(Math.sqrt(h1 * h2) / v, power);
+             v1 = Math.pow(h1 / v, power);
+             v2 = Math.pow(h2 / v, power);
+             vc = Math.pow(Math.sqrt(h1 * h2) / v, power);
           }
-          hv[i3][rec] = valSDOF;
+          hvH1[i3][rec] = v1;
+          hvH2[i3][rec] = v2;
+          hvComb[i3][rec] = vc;
+          hvMain[i3][rec] = option === 1 ? v1 : (option === 2 ? v2 : vc);
         }
       }
 
-      // --- Averaging & Standard Deviation ---
-      const hvave = Array(nspec).fill(0);
-      const hvFFTave = Array(fftFreqs.length).fill(0);
-      const hvStd = Array(nspec).fill(0);
-      const hvFFTStd = Array(fftFreqs.length).fill(0);
-      
       let selCount = selectedRecords.filter(Boolean).length;
       
-      if (selCount > 0) {
-        for (let i = 0; i < nspec; i++) {
-          let sumSDOF = 0;
-          for (let rec = 0; rec < records; rec++) {
-            if (selectedRecords[rec]) sumSDOF += hv[i][rec];
-          }
-          hvave[i] = sumSDOF / selCount;
+      // Οργανώνουμε τα Data & Stats για εύκολη πρόσβαση
+      const ratiosObj = {
+        SDOF: {
+          H1: { data: hvH1, ...calcStats(hvH1, selectedRecords, selCount) },
+          H2: { data: hvH2, ...calcStats(hvH2, selectedRecords, selCount) },
+          Comb: { data: hvComb, ...calcStats(hvComb, selectedRecords, selCount) },
+          Main: { data: hvMain, ...calcStats(hvMain, selectedRecords, selCount) } // Προς χρήση στο γράφημα
+        },
+        FFT: {
+          H1: { data: hvFFTH1, ...calcStats(hvFFTH1, selectedRecords, selCount) },
+          H2: { data: hvFFTH2, ...calcStats(hvFFTH2, selectedRecords, selCount) },
+          Comb: { data: hvFFTComb, ...calcStats(hvFFTComb, selectedRecords, selCount) },
+          Main: { data: hvFFTMain, ...calcStats(hvFFTMain, selectedRecords, selCount) } // Προς χρήση στο γράφημα
         }
-        for (let i = 0; i < fftFreqs.length; i++) {
-          let sumFFT = 0;
-          for (let rec = 0; rec < records; rec++) {
-            if (selectedRecords[rec]) sumFFT += hvFFT[i][rec];
-          }
-          hvFFTave[i] = sumFFT / selCount;
-        }
-        
-        if (selCount > 1) {
-          for (let i = 0; i < nspec; i++) {
-            let sumSq = 0;
-            for (let rec = 0; rec < records; rec++) {
-              if (selectedRecords[rec]) sumSq += Math.pow(hv[i][rec] - hvave[i], 2);
-            }
-            hvStd[i] = Math.sqrt(sumSq / (selCount - 1));
-          }
-          for (let i = 0; i < fftFreqs.length; i++) {
-            let sumSq = 0;
-            for (let rec = 0; rec < records; rec++) {
-              if (selectedRecords[rec]) sumSq += Math.pow(hvFFT[i][rec] - hvFFTave[i], 2);
-            }
-            hvFFTStd[i] = Math.sqrt(sumSq / (selCount - 1));
-          }
-        }
-      }
+      };
 
-      // --- Υπολογισμός Penalty ---
+      // --- Υπολογισμός Penalty με βάση τα νέα διακοπτάκια ---
       const penalties = Array(records).fill(0);
+      const penTarget = ratiosObj[penDomain][penRatio];
+      const freqsTarget = penDomain === 'SDOF' ? sdofFreqs : fftFreqs;
+
       for (let rec = 0; rec < records; rec++) {
         let pen = 0;
-        for (let i = 0; i < nspec; i++) {
-          const f = sdofFreqs[i];
-          if (f >= penMinF && f <= penMaxF) {
-            const diff = hv[i][rec] - hvave[i];
+        for (let i = 0; i < freqsTarget.length; i++) {
+          const f = freqsTarget[i];
+          if (f >= penMinF && f <= penMaxF && penTarget.mean[i] !== undefined) {
+            const diff = penTarget.data[i][rec] - penTarget.mean[i];
             pen += diff; 
           }
         }
@@ -586,10 +661,10 @@ export default function App() {
 
       setComputedData({ 
         sdofFreqs, fftFreqs, 
-        hv, hvFFT, 
+        ratios: ratiosObj,
         sdofV: sdofV_arr, sdofH1: sdofH1_arr, sdofH2: sdofH2_arr,
         fftV: fftV_arr, fftH1: fftH1_arr, fftH2: fftH2_arr,
-        hvave, hvFFTave, hvStd, hvFFTStd, penalties 
+        penalties 
       });
     }, 50);
 
@@ -600,15 +675,18 @@ export default function App() {
     setChartMaxX(params.maxfre);
   }, [params.maxfre]);
 
-  // Λειτουργία Αντιγραφής Πίνακα
   const handleCopyTable = () => {
     if (!computedData) return;
     let tsv = "";
     
     let freqs = tableDomain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs;
-    let meanArr = tableDomain === 'SDOF' ? computedData.hvave : computedData.hvFFTave;
-    let stdArr = tableDomain === 'SDOF' ? computedData.hvStd : computedData.hvFFTStd;
-    let data2D = tableDomain === 'SDOF' ? computedData.hv : computedData.hvFFT;
+    let targetRatioData = computedData.ratios[tableDomain][tableRatio];
+    
+    if (!targetRatioData) return;
+
+    let meanArr = targetRatioData.mean;
+    let stdArr = targetRatioData.std;
+    let data2D = targetRatioData.data;
 
     let headers = ["Freq(Hz)", "MO", "+1σ", "-1σ"];
     fileData.sensorData.forEach((_, i) => {
@@ -672,14 +750,14 @@ export default function App() {
     if (!fileData) return [];
     let indices = Array.from({length: fileData.records}, (_, i) => i);
     if (sortByPenalty && computedData?.penalties) {
-      // Ταξινόμηση: Μικρότερα (πιο αρνητικά) πρώτα, Μεγαλύτερα (πιο θετικά) τελευταία
       indices.sort((a, b) => computedData.penalties[a] - computedData.penalties[b]); 
     }
     return indices;
   };
   const recordIndices = getRecordIndices();
 
-  // --- Cursors Logic ---
+  const numChannels = fileData?.channelsPerRecord || 12;
+
   const handleTsMouseMove = (e) => {
     if (!fileData || activeRecord === null) return;
     const width = 1200, height = 240, padding = 35;
@@ -697,13 +775,13 @@ export default function App() {
       chIdx = Math.max(0, Math.min(2, chIdx));
       
       const channels = [
-        { name: "Z (Vert)", data: sensorData[activeRecord][params.chV] },
-        { name: "X (Hor 1)", data: sensorData[activeRecord][params.chH1] },
-        { name: "Y (Hor 2)", data: sensorData[activeRecord][params.chH2] }
+        { name: `Z (Ch ${params.chV + 1})`, data: sensorData[activeRecord][params.chV] },
+        { name: `X (Ch ${params.chH1 + 1})`, data: sensorData[activeRecord][params.chH1] },
+        { name: `Y (Ch ${params.chH2 + 1})`, data: sensorData[activeRecord][params.chH2] }
       ];
       
       const pIdx = Math.floor((time / tr) * npoints);
-      const val = (pIdx >= 0 && pIdx < npoints) ? channels[chIdx].data[pIdx] : 0;
+      const val = (pIdx >= 0 && pIdx < npoints && channels[chIdx].data) ? channels[chIdx].data[pIdx] : 0;
       
       setTsCursor({ time: time.toFixed(3), val: val.toExponential(2), chName: channels[chIdx].name });
     } else {
@@ -761,17 +839,22 @@ export default function App() {
           let maxVal = -Infinity;
           let minVal = Infinity;
           const step = Math.ceil(npoints / 2000); 
-          for(let i=0; i<npoints; i+=step) {
-            if(ch.data[i] > maxVal) maxVal = ch.data[i];
-            if(ch.data[i] < minVal) minVal = ch.data[i];
+          
+          if(ch.data) {
+            for(let i=0; i<npoints; i+=step) {
+              if(ch.data[i] > maxVal) maxVal = ch.data[i];
+              if(ch.data[i] < minVal) minVal = ch.data[i];
+            }
           }
           const range = Math.max(Math.abs(maxVal), Math.abs(minVal)) || 1;
 
           let path = "";
-          for(let i=0; i<npoints; i+=step) {
-            const x = padding + (i / npoints) * (width - 2 * padding);
-            const y = startY + chHeight/2 - (ch.data[i] / range) * (chHeight/2) * 0.85;
-            path += (i===0 ? "M " : " L ") + `${x} ${y}`;
+          if(ch.data) {
+            for(let i=0; i<npoints; i+=step) {
+              const x = padding + (i / npoints) * (width - 2 * padding);
+              const y = startY + chHeight/2 - (ch.data[i] / range) * (chHeight/2) * 0.85;
+              path += (i===0 ? "M " : " L ") + `${x} ${y}`;
+            }
           }
 
           return (
@@ -801,7 +884,16 @@ export default function App() {
     const height = 450;
     const padding = 50;
 
-    const { sdofFreqs, fftFreqs, hv, hvFFT, hvave, hvFFTave, hvStd, hvFFTStd } = computedData; 
+    const { sdofFreqs, fftFreqs, ratios } = computedData; 
+    
+    // Εξαγωγή των Main δεδομένων για το γράφημα (αυτά που ελέγχονται από το params.option)
+    const hv = ratios.SDOF.Main.data;
+    const hvave = ratios.SDOF.Main.mean;
+    const hvStd = ratios.SDOF.Main.std;
+    
+    const hvFFT = ratios.FFT.Main.data;
+    const hvFFTave = ratios.FFT.Main.mean;
+    const hvFFTStd = ratios.FFT.Main.std;
     
     const maxY = Number(chartMaxY) || 10;
     const maxFre = Number(chartMaxX) || 20;
@@ -835,7 +927,6 @@ export default function App() {
 
     return (
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto bg-white border rounded-lg shadow-sm" style={{ overflow: 'hidden' }} onMouseMove={handleChartMouseMove} onMouseLeave={() => setChartCursor(null)}>
-        {/* X-Axis Ticks */}
         {xTicks.map((tick, i) => (
           <g key={`x-${i}`}>
             <line x1={getX(tick)} y1={padding} x2={getX(tick)} y2={height - padding} stroke="#f0f0f0" />
@@ -845,7 +936,6 @@ export default function App() {
           </g>
         ))}
 
-        {/* Y-Axis Ticks */}
         {yTicks.map((tick, i) => (
           <g key={`y-${i}`}>
             <line x1={padding} y1={getY(tick)} x2={width - padding} y2={getY(tick)} stroke="#f0f0f0" />
@@ -855,7 +945,6 @@ export default function App() {
           </g>
         ))}
         
-        {/* Editable Tick TextBox - Max Y */}
         <foreignObject x={2} y={padding - 12} width={50} height={24} style={{ overflow: 'visible' }}>
           <input 
             type="number" 
@@ -866,7 +955,6 @@ export default function App() {
           />
         </foreignObject>
 
-        {/* Editable Tick TextBox - Max X */}
         <foreignObject x={width - padding - 25} y={height - padding + 6} width={50} height={24} style={{ overflow: 'visible' }}>
           <input 
             type="number" 
@@ -877,7 +965,6 @@ export default function App() {
           />
         </foreignObject>
         
-        {/* Y Axis Label */}
         <text x="15" y={height/2} fontSize="16" transform={`rotate(-90, 15, ${height/2})`} textAnchor="middle" fill="#666" fontWeight="500">
           HVSR Amplitude {chartScale === 'log' ? '(Log)' : ''}
         </text>
@@ -941,7 +1028,6 @@ export default function App() {
             );
           })}
 
-          {/* Σχεδίαση Std Dev (+-1σ) */}
           {displayOpts.showStdDev && displayOpts.showMeanFFT && (() => {
             let pathPlus = "", pathMinus = "";
             for(let i=0; i<fftFreqs.length; i++) {
@@ -1017,14 +1103,12 @@ export default function App() {
           })()}
         </g>
 
-        {/* Cursor Info Display */}
         {chartCursor && (
            <text x={width - padding - 15} y={padding + 12} fontSize="14" fill="#000" fontWeight="bold" textAnchor="end">
               Freq: {chartCursor.f} Hz | Amp: {chartCursor.val}
            </text>
         )}
 
-        {/* Hovered Record Indicator */}
         {hoveredRecord !== null && !chartCursor && (
           <text x={width - padding - 15} y={padding + 12} fontSize="14" fill="#475569" fontWeight="bold" textAnchor="end">
             Αναγνώριση: Record {hoveredRecord + 1}
@@ -1049,8 +1133,22 @@ export default function App() {
               <p className="text-sm text-slate-500">Spectral Ratio Computing & FFT Analysis</p>
             </div>
           </div>
-          {/* Το κουμπί Εξαγωγής CSV Αφαιρέθηκε όπως ζητήθηκε */}
         </header>
+
+        {errorMsg && (
+          <div className="mb-4 bg-red-50 border-l-4 border-red-500 p-4 rounded-r shadow-sm flex justify-between items-start">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-bold text-red-800">Πρόβλημα Ανάγνωσης</h3>
+                <p className="text-sm text-red-700 mt-1">{errorMsg}</p>
+              </div>
+            </div>
+            <button onClick={() => setErrorMsg("")} className="text-red-400 hover:text-red-600">
+               <strong className="text-xl">&times;</strong>
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_280px] gap-6">
           
@@ -1081,19 +1179,19 @@ export default function App() {
                        <div>
                          <label className="block text-slate-500 mb-1">Z (Vert)</label>
                          <select name="chV" value={params.chV} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
-                           {Array.from({length: 12}).map((_, i) => <option key={`v-${i}`} value={i}>Ch {i+1}</option>)}
+                           {Array.from({length: numChannels}).map((_, i) => <option key={`v-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
                        </div>
                        <div>
                          <label className="block text-slate-500 mb-1">X (Hor 1)</label>
                          <select name="chH1" value={params.chH1} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
-                           {Array.from({length: 12}).map((_, i) => <option key={`h1-${i}`} value={i}>Ch {i+1}</option>)}
+                           {Array.from({length: numChannels}).map((_, i) => <option key={`h1-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
                        </div>
                        <div>
                          <label className="block text-slate-500 mb-1">Y (Hor 2)</label>
                          <select name="chH2" value={params.chH2} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
-                           {Array.from({length: 12}).map((_, i) => <option key={`h2-${i}`} value={i}>Ch {i+1}</option>)}
+                           {Array.from({length: numChannels}).map((_, i) => <option key={`h2-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
                        </div>
                      </div>
@@ -1109,7 +1207,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-x-3 gap-y-3 text-xs">
                 <div>
                   <label className="block text-slate-600 font-medium mb-1">Max Freq (Hz)</label>
-                  <input type="number" name="maxfre" value={params.maxfre} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" title="Όριο συχνοτήτων για τον ταλαντωτή" />
+                  <input type="number" name="maxfre" value={params.maxfre} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" title="Όριο συχνοτήτων" />
                 </div>
                 <div>
                   <label className="block text-slate-600 font-medium mb-1">Spec Points</label>
@@ -1143,7 +1241,7 @@ export default function App() {
                   <input type="number" min="1" step="2" name="fftSmoothWindow" value={params.fftSmoothWindow} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-slate-600 font-medium mb-1">Μέθοδος Συνδυασμού</label>
+                  <label className="block text-slate-600 font-medium mb-1">Μέθοδος Συνδυασμού (Main Plot)</label>
                   <select name="option" value={params.option} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
                     <option value={1}>(H1 / V)^p</option>
                     <option value={2}>(H2 / V)^p</option>
@@ -1162,12 +1260,25 @@ export default function App() {
                   </button>
                 </div>
                 
-                <div className="mb-2 p-2 bg-slate-50 border border-slate-100 rounded text-xs">
-                  <div className="font-medium text-slate-700 mb-1">Εύρος Penalty (Hz)</div>
-                  <div className="flex gap-2 items-center mb-2">
-                    <input type="number" name="penMinF" value={params.penMinF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Από (Hz)" />
-                    <span className="text-slate-500">-</span>
-                    <input type="number" name="penMaxF" value={params.penMaxF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Έως (Hz)" />
+                <div className="mb-2 p-2 bg-slate-50 border border-slate-100 rounded text-xs flex flex-col gap-2">
+                  <div>
+                     <div className="font-medium text-slate-700 mb-1">Εύρος Penalty (Hz)</div>
+                     <div className="flex gap-2 items-center">
+                       <input type="number" name="penMinF" value={params.penMinF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Από (Hz)" />
+                       <span className="text-slate-500">-</span>
+                       <input type="number" name="penMaxF" value={params.penMaxF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Έως (Hz)" />
+                     </div>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                     <select name="penDomain" value={params.penDomain} onChange={handleParamChange} className="border border-slate-300 p-1 rounded outline-none bg-white flex-1">
+                       <option value="SDOF">SDOF</option>
+                       <option value="FFT">FFT</option>
+                     </select>
+                     <select name="penRatio" value={params.penRatio} onChange={handleParamChange} className="border border-slate-300 p-1 rounded outline-none bg-white flex-1">
+                       <option value="H1">Sx/Sv</option>
+                       <option value="H2">Sy/Sv</option>
+                       <option value="Comb">H/V</option>
+                     </select>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer mt-1 hover:text-blue-700">
                     <input type="checkbox" checked={sortByPenalty} onChange={(e) => setSortByPenalty(e.target.checked)} className="rounded text-blue-600 cursor-pointer" />
@@ -1218,7 +1329,6 @@ export default function App() {
                   {renderChart()}
                   
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-2 h-[350px]">
-                    {/* Αριστερά: Heatmap */}
                     <HeatmapViewer 
                       computedData={computedData} 
                       records={fileData.records} 
@@ -1227,12 +1337,11 @@ export default function App() {
                       setActiveRecord={setActiveRecord}
                     />
                     
-                    {/* Δεξιά: Πίνακας Δεδομένων */}
                     <div className="flex flex-col h-full bg-white border border-slate-200 shadow-sm rounded-lg overflow-hidden">
                       <div className="flex items-center justify-between p-3 bg-slate-50 border-b border-slate-200">
                         <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
                           <Table className="w-4 h-4 text-blue-600" />
-                          Πίνακας Λόγων H/V
+                          Πίνακας Δεδομένων
                         </h3>
                         <div className="flex items-center gap-2">
                            <select 
@@ -1242,6 +1351,15 @@ export default function App() {
                            >
                              <option value="SDOF">SDOF</option>
                              <option value="FFT">FFT</option>
+                           </select>
+                           <select 
+                             value={tableRatio} 
+                             onChange={(e) => setTableRatio(e.target.value)}
+                             className="border border-slate-300 text-xs rounded p-1 outline-none bg-white"
+                           >
+                             <option value="H1">Sx/Sv</option>
+                             <option value="H2">Sy/Sv</option>
+                             <option value="Comb">H/V</option>
                            </select>
                            <button 
                              onClick={handleCopyTable}
@@ -1266,18 +1384,17 @@ export default function App() {
                           </thead>
                           <tbody>
                             {(tableDomain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs).map((freq, i) => {
-                              const mean = tableDomain === 'SDOF' ? computedData.hvave[i] : computedData.hvFFTave[i];
-                              const std = tableDomain === 'SDOF' ? computedData.hvStd[i] : computedData.hvFFTStd[i];
-                              const hvData = tableDomain === 'SDOF' ? computedData.hv[i] : computedData.hvFFT[i];
+                              const trData = computedData.ratios[tableDomain][tableRatio];
+                              if (!trData) return null;
                               return (
                                 <tr key={`tr-${i}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                                   <td className="p-2 text-left font-medium text-slate-600">{freq.toFixed(2)}</td>
-                                  <td className="p-2 font-bold text-slate-800">{mean.toFixed(2)}</td>
-                                  <td className="p-2 text-slate-500">{(mean + std).toFixed(2)}</td>
-                                  <td className="p-2 text-slate-500">{Math.max(0, mean - std).toFixed(2)}</td>
+                                  <td className="p-2 font-bold text-slate-800">{trData.mean[i].toFixed(2)}</td>
+                                  <td className="p-2 text-slate-500">{(trData.mean[i] + trData.std[i]).toFixed(2)}</td>
+                                  <td className="p-2 text-slate-500">{Math.max(0, trData.mean[i] - trData.std[i]).toFixed(2)}</td>
                                   {selectedRecords.map((isSelected, recIdx) => isSelected ? (
                                     <td key={`td-${i}-${recIdx}`} className="p-2 text-slate-600">
-                                      {hvData[recIdx].toFixed(2)}
+                                      {trData.data[i][recIdx].toFixed(2)}
                                     </td>
                                   ) : null)}
                                 </tr>
