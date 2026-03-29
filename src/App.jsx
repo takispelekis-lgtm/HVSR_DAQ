@@ -7,17 +7,23 @@ function computeSpectraForChannel(w, c, dt, acc) {
   const npts = acc.length;
   if (npts < 3) return 0;
   
+  // Ασφάλεια: Αποτροπή διαίρεσης με το μηδέν ή φανταστικών αριθμών
+  const safeC = Math.max(0.001, Math.min(0.99, c)); 
+  
   const OMGO = w * dt;
-  const omgd = OMGO * Math.sqrt(1 - c * c);
+  const omgd = OMGO * Math.sqrt(1 - safeC * safeC);
   const cosd = Math.cos(omgd);
   const sind = Math.sin(omgd);
-  const exp1 = Math.exp(-c * OMGO);
-  const exp2 = Math.exp(-2 * c * OMGO);
+  const exp1 = Math.exp(-safeC * OMGO);
+  const exp2 = Math.exp(-2 * safeC * OMGO);
   const b1 = 2 * exp1 * cosd;
   const b2 = -exp2;
-  const E1 = (1 / omgd) * exp1 * sind;
-  const E2 = (-2 * exp1 / omgd) * sind;
-  const e3 = exp1 * (cosd - (1 + c * OMGO) / omgd * sind);
+  
+  // Προστασία για πολύ μικρό omgd (στις πάρα πολύ χαμηλές συχνότητες)
+  const safeOmgd = omgd > 1e-10 ? omgd : 1e-10; 
+  const E1 = (1 / safeOmgd) * exp1 * sind;
+  const E2 = (-2 * exp1 / safeOmgd) * sind;
+  const e3 = exp1 * (cosd - (1 + safeC * OMGO) / safeOmgd * sind);
 
   let AM1 = -acc[0];
   let a = -e3 * acc[0] - E1 * acc[1];
@@ -133,7 +139,6 @@ function getDerivative(data, dt) {
   return out;
 }
 
-// Υπολογισμός Mean και Std Dev για 2D arrays (Συχνότητες x Καταγραφές)
 function calcStats(data2D, selectedRecords, selCount) {
   if (!data2D || data2D.length === 0) return { mean: [], std: [] };
   const len = data2D.length;
@@ -163,7 +168,6 @@ function calcStats(data2D, selectedRecords, selCount) {
   return { mean, std };
 }
 
-// --- ΣΥΝΑΡΤΗΣΕΙΣ HEATMAP ---
 function valueToColor(val, min, max, logScale) {
   let v;
   if (logScale) {
@@ -184,7 +188,7 @@ function valueToColor(val, min, max, logScale) {
 const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, setActiveRecord }) => {
   const [hmParams, setHmParams] = useState({
     domain: 'SDOF',
-    component: 'Comb', // 'H1', 'H2', 'Comb', 'Z', 'X', 'Y'
+    component: 'Comb',
     maxF: 20,
     logScale: true
   });
@@ -388,11 +392,11 @@ export default function App() {
     penMinF: 0.5,
     penMaxF: 10.0,
     penDomain: 'SDOF',
-    penRatio: 'Comb' // 'H1', 'H2', 'Comb'
+    penRatio: 'Comb'
   });
 
   const [selectedRecords, setSelectedRecords] = useState([]);
-  const [activeRecord, setActiveRecord] = useState(0); 
+  const [activeRecord, setActiveRecord] = useState(null); 
   const [hoveredRecord, setHoveredRecord] = useState(null);
   const [computedData, setComputedData] = useState(null);
   
@@ -402,7 +406,7 @@ export default function App() {
   
   const [sortByPenalty, setSortByPenalty] = useState(false);
   const [tableDomain, setTableDomain] = useState('SDOF'); 
-  const [tableRatio, setTableRatio] = useState('Comb'); // 'H1', 'H2', 'Comb'
+  const [tableRatio, setTableRatio] = useState('Comb'); 
   const [tableCopied, setTableCopied] = useState(false);
 
   const [tsCursor, setTsCursor] = useState(null);
@@ -421,10 +425,19 @@ export default function App() {
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // --- FULL RESET ΥΠΟΛΟΙΠΩΝ STATES (Για να μην μένουν σκουπίδια από προηγούμενο αρχείο) ---
     setFileName(file.name);
     setLoading(true);
     setErrorMsg("");
-
+    setFileData(null);
+    setComputedData(null);
+    setSelectedRecords([]);
+    setActiveRecord(null);
+    setHoveredRecord(null);
+    setTsCursor(null);
+    setChartCursor(null);
+    
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target.result;
@@ -439,14 +452,12 @@ export default function App() {
 
         const npoints = Math.floor(tr / dt);
 
-        // Δυναμική ανίχνευση και υπολογισμός Record Index
         const dataStartIndex = 22;
         let actualDataStart = dataStartIndex;
         let firstLineTokens = [];
         
         for (let i = dataStartIndex; i < Math.min(lines.length, dataStartIndex + 100); i++) {
           const tokens = lines[i].trim().split(/[\s,]+/).filter(Boolean);
-          // Ελέγχουμε αν η γραμμή έχει αριθμούς
           if (tokens.length > 2 && !isNaN(parseFloat(tokens[2]))) {
             firstLineTokens = tokens;
             actualDataStart = i;
@@ -459,7 +470,6 @@ export default function App() {
         }
 
         const columns = firstLineTokens.length;
-        // Ο ΤΥΠΟΣ ΠΟΥ ΖΗΤΗΘΗΚΕ: Record Index=(columns-2)/12 
         const recordsFromData = Math.floor((columns - 2) / 12);
 
         if (recordsFromData <= 0) {
@@ -496,6 +506,20 @@ export default function App() {
 
         if (parsedLinesCount === 0) {
             throw new Error("Το αρχείο είναι άδειο ή η δομή του δεν διαβάστηκε σωστά.");
+        }
+        
+        // BASELINE CORRECTION (Αφαίρεση Μέσης Τιμής για την αποφυγή Low Freq Blow-up στο SDOF)
+        for (let rec = 0; rec < records; rec++) {
+          for (let ch = 0; ch < channelsPerRecord; ch++) {
+            let sum = 0;
+            for (let i = 0; i < npoints; i++) {
+              sum += sensorData[rec][ch][i];
+            }
+            const mean = sum / npoints;
+            for (let i = 0; i < npoints; i++) {
+              sensorData[rec][ch][i] -= mean;
+            }
+          }
         }
 
         setParams(p => {
@@ -535,22 +559,20 @@ export default function App() {
       const sdofH1_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
       const sdofH2_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
       
-      // SDOF Ratios
       const hvH1 = Array(nspec).fill(0).map(() => Array(records).fill(0));
       const hvH2 = Array(nspec).fill(0).map(() => Array(records).fill(0));
       const hvComb = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const hvMain = Array(nspec).fill(0).map(() => Array(records).fill(0)); // Για το κεντρικό γράφημα (βάσει params.option)
+      const hvMain = Array(nspec).fill(0).map(() => Array(records).fill(0)); 
       
       let fftFreqs = [];
       let fftV_arr = [];
       let fftH1_arr = [];
       let fftH2_arr = [];
       
-      // FFT Ratios
       let hvFFTH1 = [];
       let hvFFTH2 = [];
       let hvFFTComb = [];
-      let hvFFTMain = []; // Για το κεντρικό γράφημα
+      let hvFFTMain = []; 
 
       for (let rec = 0; rec < records; rec++) {
         
@@ -626,23 +648,21 @@ export default function App() {
 
       let selCount = selectedRecords.filter(Boolean).length;
       
-      // Οργανώνουμε τα Data & Stats για εύκολη πρόσβαση
       const ratiosObj = {
         SDOF: {
           H1: { data: hvH1, ...calcStats(hvH1, selectedRecords, selCount) },
           H2: { data: hvH2, ...calcStats(hvH2, selectedRecords, selCount) },
           Comb: { data: hvComb, ...calcStats(hvComb, selectedRecords, selCount) },
-          Main: { data: hvMain, ...calcStats(hvMain, selectedRecords, selCount) } // Προς χρήση στο γράφημα
+          Main: { data: hvMain, ...calcStats(hvMain, selectedRecords, selCount) } 
         },
         FFT: {
           H1: { data: hvFFTH1, ...calcStats(hvFFTH1, selectedRecords, selCount) },
           H2: { data: hvFFTH2, ...calcStats(hvFFTH2, selectedRecords, selCount) },
           Comb: { data: hvFFTComb, ...calcStats(hvFFTComb, selectedRecords, selCount) },
-          Main: { data: hvFFTMain, ...calcStats(hvFFTMain, selectedRecords, selCount) } // Προς χρήση στο γράφημα
+          Main: { data: hvFFTMain, ...calcStats(hvFFTMain, selectedRecords, selCount) } 
         }
       };
 
-      // --- Υπολογισμός Penalty με βάση τα νέα διακοπτάκια ---
       const penalties = Array(records).fill(0);
       const penTarget = ratiosObj[penDomain][penRatio];
       const freqsTarget = penDomain === 'SDOF' ? sdofFreqs : fftFreqs;
@@ -886,7 +906,6 @@ export default function App() {
 
     const { sdofFreqs, fftFreqs, ratios } = computedData; 
     
-    // Εξαγωγή των Main δεδομένων για το γράφημα (αυτά που ελέγχονται από το params.option)
     const hv = ratios.SDOF.Main.data;
     const hvave = ratios.SDOF.Main.mean;
     const hvStd = ratios.SDOF.Main.std;
