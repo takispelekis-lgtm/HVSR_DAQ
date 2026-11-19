@@ -1,16 +1,30 @@
-# React + Vite
+# HVSR Analyzer Pro
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Εφαρμογή browser για ανάλυση φασματικών λόγων H/V (HVSR) από καταγραφές μικροθορύβου. Όλοι οι υπολογισμοί γίνονται τοπικά στον browser· δεν ανεβαίνουν δεδομένα πουθενά.
 
-Currently, two official plugins are available:
+Online: https://takispelekis-lgtm.github.io/HVSR_DAQ/
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Τι κάνει
 
-## React Compiler
+- Διαβάζει αρχείο CSV με πολλές καταγραφές (12 κανάλια ανά καταγραφή) και επιλογή καναλιών Z / X / Y.
+- Υπολογίζει φάσματα απόκρισης SDOF και φάσματα Fourier (FFT) για κάθε συνιστώσα.
+- Λόγοι Sx/Sv, Sy/Sv και H/V = √(Sx·Sy)/Sv, με μέσο όρο και ±1σ από τις επιλεγμένες καταγραφές.
+- Γράφημα με τα μεμονωμένα φάσματα Sx, Sy, Sv.
+- Penalty ανά καταγραφή (μέση απόλυτη απόκλιση από τον μέσο όρο σε εύρος συχνοτήτων) για εντοπισμό κακών καταγραφών.
+- Heatmap, πίνακας δεδομένων και αντιγραφή σε μορφή TSV (για Excel).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Μορφή CSV
 
-## Expanding the ESLint configuration
+- Γραμμή 10: διάρκεια καταγραφής σε sec (τελευταία τιμή της γραμμής).
+- Γραμμή 11: βήμα δειγματοληψίας dt σε ms (τελευταία τιμή της γραμμής).
+- Δεδομένα από τη γραμμή 23: 2 αρχικές στήλες και μετά 12 κανάλια ανά καταγραφή, με τις καταγραφές τη μία δίπλα στην άλλη.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Ανάπτυξη
+
+```bash
+npm install
+npm run dev      # τοπικός server
+npm run build    # παραγωγή στο dist/
+npm run lint
+npm run deploy   # δημοσίευση στο GitHub Pages
+```

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Upload, Settings, Activity, LineChart, FileText, ChevronLeft, ChevronRight, Eye, Grid, Table, Copy, Check, AlertTriangle } from 'lucide-react';
 
 // --- ΥΠΟΛΟΓΙΣΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ---
@@ -286,6 +286,11 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
     }
   };
 
+  // Ο άξονας Y δείχνει μέχρι εκεί που υπάρχουν πράγματι δεδομένα
+  const axisFreqs = (hmParams.domain === 'SDOF' ? computedData?.sdofFreqs : computedData?.fftFreqs) || [];
+  const lastFreq = axisFreqs.length > 0 ? axisFreqs[axisFreqs.length - 1] : hmParams.maxF;
+  const axisMaxF = Math.min(hmParams.maxF, lastFreq);
+
   return (
     <div className="flex flex-col h-full bg-white border border-slate-200 shadow-sm rounded-lg overflow-hidden">
       <div className="flex items-center justify-between p-3 gap-2 bg-slate-50 border-b border-slate-200">
@@ -310,9 +315,9 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
             <option value="H1">Sx/Sv</option>
             <option value="H2">Sy/Sv</option>
             <option value="Comb">H/V</option>
-            <option value="Z">Z (Vert)</option>
-            <option value="X">X (Hor 1)</option>
-            <option value="Y">Y (Hor 2)</option>
+            <option value="X">Sx</option>
+            <option value="Y">Sy</option>
+            <option value="Z">Sv</option>
           </select>
           <input 
             type="number" 
@@ -335,7 +340,7 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
       <div className="flex-1 relative flex bg-white m-2 border border-slate-200 mt-0">
          <div className="w-12 relative p-1 text-[10px] text-slate-700 font-bold bg-slate-50 border-r border-slate-200">
             {[0, 0.25, 0.5, 0.75, 1].map(frac => {
-               const val = hmParams.maxF * frac;
+               const val = axisMaxF * frac;
                return (
                  <span key={frac} className="absolute right-1" style={{ bottom: `${frac * 100}%`, transform: 'translateY(50%)' }}>
                    {val.toFixed(1)}
@@ -362,6 +367,209 @@ const HeatmapViewer = ({ computedData, records, selectedRecords, activeRecord, s
               </span>
             );
          })}
+      </div>
+    </div>
+  );
+};
+
+
+function fmtVal(v, digits = 2) {
+  if (v === undefined || v === null || !isFinite(v)) return '-';
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 0.01 || a >= 1e5)) return v.toExponential(Math.max(2, digits - 1));
+  return v.toFixed(digits);
+}
+
+const SPECTRA_COMPONENTS = [
+  { key: 'X', label: 'Sx', color: '#0284c7' },
+  { key: 'Y', label: 'Sy', color: '#dc2626' },
+  { key: 'Z', label: 'Sv', color: '#57534e' }
+];
+
+// Γράφημα με τα μεμονωμένα φάσματα Sx, Sy, Sv (μέσος όρος επιλεγμένων + ενεργή καταγραφή)
+const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
+  const [domain, setDomain] = useState('SDOF');
+  const [logY, setLogY] = useState(true);
+  const [show, setShow] = useState({ X: true, Y: true, Z: true });
+  const [showActive, setShowActive] = useState(true);
+  const [showStd, setShowStd] = useState(false);
+  const [cursor, setCursor] = useState(null);
+
+  const width = 1200, height = 380, padL = 70, padR = 30, padT = 25, padB = 50;
+  const freqs = domain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs;
+  const comps = computedData.comps[domain];
+  const xMax = Number(maxFre) || 20;
+  const hasActive = showActive && activeRecord !== null;
+  const visible = SPECTRA_COMPONENTS.filter(c => show[c.key]);
+
+  // Αυτόματη κλίμακα Y από τις ορατές καμπύλες
+  let lo = Infinity, hi = 0;
+  const consider = (v) => {
+    if (!(v > 0) || !isFinite(v)) return;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  };
+  visible.forEach(c => {
+    const s = comps[c.key];
+    for (let i = 0; i < freqs.length; i++) {
+      if (freqs[i] > xMax) break;
+      consider(s.mean[i]);
+      if (showStd) consider(s.mean[i] + s.std[i]);
+      if (hasActive) consider(s.data[i][activeRecord]);
+    }
+  });
+  if (hi === 0) { lo = 0.1; hi = 1; }
+
+  let lMin = Math.floor(Math.log10(lo));
+  let lMax = Math.ceil(Math.log10(hi));
+  if (lMax <= lMin) lMax = lMin + 1;
+  if (lMax - lMin > 6) lMin = lMax - 6;
+  const linMax = hi * 1.05;
+
+  const getX = (f) => padL + (f / xMax) * (width - padL - padR);
+  const getY = (v) => {
+    let t;
+    if (logY) {
+      t = (Math.log10(Math.max(v, Math.pow(10, lMin))) - lMin) / (lMax - lMin);
+    } else {
+      t = v / linMax;
+    }
+    t = Math.max(0, Math.min(1, t));
+    return height - padB - t * (height - padT - padB);
+  };
+
+  const yTicks = [];
+  if (logY) {
+    for (let k = lMin; k <= lMax; k++) yTicks.push(Math.pow(10, k));
+  } else {
+    for (let k = 0; k <= 5; k++) yTicks.push((linMax / 5) * k);
+  }
+  const xTicks = [];
+  for (let k = 0; k <= 10; k++) xTicks.push((xMax / 10) * k);
+
+  const buildPath = (getVal) => {
+    let path = "";
+    for (let i = 0; i < freqs.length; i++) {
+      if (freqs[i] > xMax * 1.01) break;
+      path += (path === "" ? "M " : " L ") + `${getX(freqs[i])} ${getY(getVal(i))}`;
+    }
+    return path;
+  };
+
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xSvg = (e.clientX - rect.left) / rect.width * width;
+    const ySvg = (e.clientY - rect.top) / rect.height * height;
+    if (xSvg >= padL && xSvg <= width - padR && ySvg >= padT && ySvg <= height - padB) {
+      const f = (xSvg - padL) / (width - padL - padR) * xMax;
+      const t = (height - padB - ySvg) / (height - padT - padB);
+      const val = logY ? Math.pow(10, lMin + t * (lMax - lMin)) : t * linMax;
+      setCursor({ f: f.toFixed(2), val: val.toExponential(2) });
+    } else {
+      setCursor(null);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 shadow-sm rounded-lg overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between p-3 gap-2 bg-slate-50 border-b border-slate-200">
+        <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+          <LineChart className="w-4 h-4 text-blue-600" />
+          Φάσματα Συνιστωσών (Sx, Sy, Sv)
+        </h3>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <select
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            className="border border-slate-300 rounded p-1 outline-none bg-white"
+          >
+            <option value="SDOF">SDOF</option>
+            <option value="FFT">FFT</option>
+          </select>
+          {SPECTRA_COMPONENTS.map(c => (
+            <label key={c.key} className="flex items-center gap-1 cursor-pointer font-bold" style={{ color: c.color }}>
+              <input
+                type="checkbox"
+                checked={show[c.key]}
+                onChange={() => setShow(prev => ({ ...prev, [c.key]: !prev[c.key] }))}
+              />
+              <span className="inline-block w-4 h-1 rounded-full" style={{ backgroundColor: c.color }}></span>
+              {c.label}
+            </label>
+          ))}
+          <label className="flex items-center gap-1 cursor-pointer font-bold text-slate-700">
+            <input type="checkbox" checked={showActive} onChange={(e) => setShowActive(e.target.checked)} />
+            Ενεργό Record
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer font-bold text-slate-700">
+            <input type="checkbox" checked={showStd} onChange={(e) => setShowStd(e.target.checked)} />
+            ±1σ
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer font-bold text-slate-700">
+            <input type="checkbox" checked={logY} onChange={(e) => setLogY(e.target.checked)} />
+            Log
+          </label>
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto bg-white" onMouseMove={handleMouseMove} onMouseLeave={() => setCursor(null)}>
+        {xTicks.map((tick, i) => (
+          <g key={`sx-${i}`}>
+            <line x1={getX(tick)} y1={padT} x2={getX(tick)} y2={height - padB} stroke="#f0f0f0" />
+            <text x={getX(tick)} y={height - padB + 18} fontSize="14" textAnchor="middle" fill="#666">{tick.toFixed(1)}</text>
+          </g>
+        ))}
+        {yTicks.map((tick, i) => (
+          <g key={`sy-${i}`}>
+            <line x1={padL} y1={getY(tick)} x2={width - padR} y2={getY(tick)} stroke="#f0f0f0" />
+            <text x={padL - 8} y={getY(tick) + 5} fontSize="13" textAnchor="end" fill="#666">
+              {tick === 0 ? '0' : tick.toExponential(logY ? 0 : 1)}
+            </text>
+          </g>
+        ))}
+
+        <text x="14" y={height / 2} fontSize="15" transform={`rotate(-90, 14, ${height / 2})`} textAnchor="middle" fill="#666" fontWeight="500">
+          Φασματικό Πλάτος {logY ? '(Log)' : ''}
+        </text>
+        <text x={width / 2} y={height - 8} fontSize="15" textAnchor="middle" fill="#666" fontWeight="500">
+          Frequency (Hz)
+        </text>
+
+        <clipPath id="spectra-chart-area">
+          <rect x={padL} y={padT} width={width - padL - padR} height={height - padT - padB} />
+        </clipPath>
+
+        <g clipPath="url(#spectra-chart-area)">
+          {visible.map(c => {
+            const s = comps[c.key];
+            return (
+              <g key={`comp-${c.key}`}>
+                {showStd && (
+                  <g opacity="0.5">
+                    <path d={buildPath(i => s.mean[i] + s.std[i])} fill="none" stroke={c.color} strokeWidth="1.5" strokeDasharray="3,4" />
+                    <path d={buildPath(i => Math.max(0, s.mean[i] - s.std[i]))} fill="none" stroke={c.color} strokeWidth="1.5" strokeDasharray="3,4" />
+                  </g>
+                )}
+                {hasActive && (
+                  <path d={buildPath(i => s.data[i][activeRecord])} fill="none" stroke={c.color} strokeWidth="1.5" strokeDasharray="6,4" opacity="0.8" />
+                )}
+                <path d={buildPath(i => s.mean[i])} fill="none" stroke={c.color} strokeWidth="3" />
+              </g>
+            );
+          })}
+        </g>
+
+        <line x1={padL} y1={height - padB} x2={width - padR} y2={height - padB} stroke="#333" strokeWidth="2" />
+        <line x1={padL} y1={padT} x2={padL} y2={height - padB} stroke="#333" strokeWidth="2" />
+
+        {cursor && (
+          <text x={width - padR - 10} y={padT + 14} fontSize="14" fill="#000" fontWeight="bold" textAnchor="end">
+            Freq: {cursor.f} Hz | Amp: {cursor.val}
+          </text>
+        )}
+      </svg>
+      <div className="px-3 pb-2 text-[11px] text-slate-500">
+        Συνεχής γραμμή: μέσος όρος επιλεγμένων καταγραφών · Διακεκομμένη: ενεργή καταγραφή{hasActive ? ` (Record ${activeRecord + 1})` : ''}
       </div>
     </div>
   );
@@ -398,7 +606,7 @@ export default function App() {
   const [selectedRecords, setSelectedRecords] = useState([]);
   const [activeRecord, setActiveRecord] = useState(null); 
   const [hoveredRecord, setHoveredRecord] = useState(null);
-  const [computedData, setComputedData] = useState(null);
+  const [spectra, setSpectra] = useState(null);
   
   const [chartScale, setChartScale] = useState('linear');
   const [chartMaxY, setChartMaxY] = useState(10); 
@@ -431,7 +639,7 @@ export default function App() {
     setLoading(true);
     setErrorMsg("");
     setFileData(null);
-    setComputedData(null);
+    setSpectra(null);
     setSelectedRecords([]);
     setActiveRecord(null);
     setHoveredRecord(null);
@@ -490,7 +698,7 @@ export default function App() {
           if (lineIdx >= lines.length) break;
           const tokens = lines[lineIdx].trim().split(/[\s,]+/).filter(Boolean);
           
-          if (tokens.length < channelsPerRecord * records) continue; 
+          if (tokens.length < leadingCols + channelsPerRecord * records) continue;
           parsedLinesCount++;
 
           let tIdx = leadingCols; 
@@ -543,43 +751,38 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  const { nspec, maxfre, dratio, dt, power, option, horGain, windowType, fftSmoothWindow, sdofInput, chV, chH1, chH2, penMinF, penMaxF, penDomain, penRatio } = params;
+
+  // --- ΒΑΡΥΣ ΥΠΟΛΟΓΙΣΜΟΣ: φάσματα SDOF & FFT ανά καταγραφή ---
+  // Τρέχει μόνο όταν αλλάζει το αρχείο ή παράμετρος που επηρεάζει τα ίδια τα φάσματα
+  // (όχι όταν αλλάζει η επιλογή καταγραφών ή οι ρυθμίσεις του penalty).
   useEffect(() => {
     if (!fileData) return;
 
     const timer = setTimeout(() => {
       const { records, sensorData } = fileData;
-      const { nspec, maxfre, dratio, dt, option, power, horGain, windowType, fftSmoothWindow, sdofInput, chV, chH1, chH2, penMinF, penMaxF, penDomain, penRatio } = params;
-      
-      const safeMaxFre = Number(maxfre) || 20;
-      
-      const sdofFreqs = [];
-      for (let i = 1; i <= nspec; i++) sdofFreqs.push((safeMaxFre / nspec) * i);
 
-      const sdofV_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const sdofH1_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const sdofH2_arr = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      
-      const hvH1 = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const hvH2 = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const hvComb = Array(nspec).fill(0).map(() => Array(records).fill(0));
-      const hvMain = Array(nspec).fill(0).map(() => Array(records).fill(0)); 
-      
+      const safeMaxFre = Number(maxfre) || 20;
+      const nSpec = Math.max(1, Math.floor(Number(nspec) || 1));
+
+      const sdofFreqs = [];
+      for (let i = 1; i <= nSpec; i++) sdofFreqs.push((safeMaxFre / nSpec) * i);
+
+      const sdofV_arr = Array(nSpec).fill(0).map(() => Array(records).fill(0));
+      const sdofH1_arr = Array(nSpec).fill(0).map(() => Array(records).fill(0));
+      const sdofH2_arr = Array(nSpec).fill(0).map(() => Array(records).fill(0));
+
       let fftFreqs = [];
       let fftV_arr = [];
       let fftH1_arr = [];
       let fftH2_arr = [];
-      
-      let hvFFTH1 = [];
-      let hvFFTH2 = [];
-      let hvFFTComb = [];
-      let hvFFTMain = []; 
 
       for (let rec = 0; rec < records; rec++) {
-        
+
         const vFAS = getFAS(sensorData[rec][chV], dt, windowType, 1);
         const h1FAS = getFAS(sensorData[rec][chH1], dt, windowType, 1);
         const h2FAS = getFAS(sensorData[rec][chH2], dt, windowType, 1);
-        
+
         const smoothedVFAS = smoothFAS(vFAS, fftSmoothWindow).filter(item => item.f > 0 && item.f <= safeMaxFre);
         const smoothedH1FAS = smoothFAS(h1FAS, fftSmoothWindow).filter(item => item.f > 0 && item.f <= safeMaxFre);
         const smoothedH2FAS = smoothFAS(h2FAS, fftSmoothWindow).filter(item => item.f > 0 && item.f <= safeMaxFre);
@@ -589,107 +792,103 @@ export default function App() {
           fftV_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
           fftH1_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
           fftH2_arr = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
-          
-          hvFFTH1 = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
-          hvFFTH2 = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
-          hvFFTComb = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
-          hvFFTMain = Array(fftFreqs.length).fill(0).map(() => Array(records).fill(0));
         }
 
         for (let i3 = 0; i3 < fftFreqs.length; i3++) {
-          const vAmp = smoothedVFAS[i3].amp;
-          const h1Amp = smoothedH1FAS[i3].amp;
-          const h2Amp = smoothedH2FAS[i3].amp;
-
-          fftV_arr[i3][rec] = vAmp;
-          fftH1_arr[i3][rec] = h1Amp;
-          fftH2_arr[i3][rec] = h2Amp;
-
-          let v1 = 0, v2 = 0, vc = 0;
-          if (vAmp > 0) {
-             v1 = Math.pow(h1Amp / vAmp, power);
-             v2 = Math.pow(h2Amp / vAmp, power);
-             vc = Math.pow(Math.sqrt(h1Amp * h2Amp) / vAmp, power);
-          }
-          hvFFTH1[i3][rec] = v1;
-          hvFFTH2[i3][rec] = v2;
-          hvFFTComb[i3][rec] = vc;
-          hvFFTMain[i3][rec] = option === 1 ? v1 : (option === 2 ? v2 : vc);
+          fftV_arr[i3][rec] = smoothedVFAS[i3].amp;
+          fftH1_arr[i3][rec] = smoothedH1FAS[i3].amp;
+          fftH2_arr[i3][rec] = smoothedH2FAS[i3].amp;
         }
 
         const sdofV = sdofInput === 'acceleration' ? getDerivative(sensorData[rec][chV], dt) : sensorData[rec][chV];
         const sdofH1 = sdofInput === 'acceleration' ? getDerivative(sensorData[rec][chH1], dt) : sensorData[rec][chH1];
         const sdofH2 = sdofInput === 'acceleration' ? getDerivative(sensorData[rec][chH2], dt) : sensorData[rec][chH2];
 
-        for (let i3 = 0; i3 < nspec; i3++) {
-          const fre = sdofFreqs[i3];
-          const w = 2 * Math.PI * fre;
-
-          const v = computeSpectraForChannel(w, dratio, dt, sdofV);
-          const h1 = computeSpectraForChannel(w, dratio, dt, sdofH1) * horGain;
-          const h2 = computeSpectraForChannel(w, dratio, dt, sdofH2) * horGain;
-
-          sdofV_arr[i3][rec] = v;
-          sdofH1_arr[i3][rec] = h1;
-          sdofH2_arr[i3][rec] = h2;
-
-          let v1 = 0, v2 = 0, vc = 0;
-          if (v > 0) {
-             v1 = Math.pow(h1 / v, power);
-             v2 = Math.pow(h2 / v, power);
-             vc = Math.pow(Math.sqrt(h1 * h2) / v, power);
-          }
-          hvH1[i3][rec] = v1;
-          hvH2[i3][rec] = v2;
-          hvComb[i3][rec] = vc;
-          hvMain[i3][rec] = option === 1 ? v1 : (option === 2 ? v2 : vc);
+        for (let i3 = 0; i3 < nSpec; i3++) {
+          const w = 2 * Math.PI * sdofFreqs[i3];
+          sdofV_arr[i3][rec] = computeSpectraForChannel(w, dratio, dt, sdofV);
+          sdofH1_arr[i3][rec] = computeSpectraForChannel(w, dratio, dt, sdofH1) * horGain;
+          sdofH2_arr[i3][rec] = computeSpectraForChannel(w, dratio, dt, sdofH2) * horGain;
         }
       }
 
-      let selCount = selectedRecords.filter(Boolean).length;
-      
-      const ratiosObj = {
-        SDOF: {
-          H1: { data: hvH1, ...calcStats(hvH1, selectedRecords, selCount) },
-          H2: { data: hvH2, ...calcStats(hvH2, selectedRecords, selCount) },
-          Comb: { data: hvComb, ...calcStats(hvComb, selectedRecords, selCount) },
-          Main: { data: hvMain, ...calcStats(hvMain, selectedRecords, selCount) } 
-        },
-        FFT: {
-          H1: { data: hvFFTH1, ...calcStats(hvFFTH1, selectedRecords, selCount) },
-          H2: { data: hvFFTH2, ...calcStats(hvFFTH2, selectedRecords, selCount) },
-          Comb: { data: hvFFTComb, ...calcStats(hvFFTComb, selectedRecords, selCount) },
-          Main: { data: hvFFTMain, ...calcStats(hvFFTMain, selectedRecords, selCount) } 
-        }
-      };
-
-      const penalties = Array(records).fill(0);
-      const penTarget = ratiosObj[penDomain][penRatio];
-      const freqsTarget = penDomain === 'SDOF' ? sdofFreqs : fftFreqs;
-
-      for (let rec = 0; rec < records; rec++) {
-        let pen = 0;
-        for (let i = 0; i < freqsTarget.length; i++) {
-          const f = freqsTarget[i];
-          if (f >= penMinF && f <= penMaxF && penTarget.mean[i] !== undefined) {
-            const diff = penTarget.data[i][rec] - penTarget.mean[i];
-            pen += diff; 
-          }
-        }
-        penalties[rec] = pen;
-      }
-
-      setComputedData({ 
-        sdofFreqs, fftFreqs, 
-        ratios: ratiosObj,
+      setSpectra({
+        records, sdofFreqs, fftFreqs,
         sdofV: sdofV_arr, sdofH1: sdofH1_arr, sdofH2: sdofH2_arr,
-        fftV: fftV_arr, fftH1: fftH1_arr, fftH2: fftH2_arr,
-        penalties 
+        fftV: fftV_arr, fftH1: fftH1_arr, fftH2: fftH2_arr
       });
     }, 50);
 
     return () => clearTimeout(timer);
-  }, [fileData, params, selectedRecords]);
+  }, [fileData, nspec, maxfre, dratio, dt, horGain, windowType, fftSmoothWindow, sdofInput, chV, chH1, chH2]);
+
+  // --- ΕΛΑΦΡΥΣ ΥΠΟΛΟΓΙΣΜΟΣ: λόγοι, μέσοι όροι, σ και penalties ---
+  const computedData = useMemo(() => {
+    if (!spectra || !fileData || spectra.records !== fileData.records) return null;
+    const { records, sdofFreqs, fftFreqs, sdofV, sdofH1, sdofH2, fftV, fftH1, fftH2 } = spectra;
+
+    const selCount = selectedRecords.filter(Boolean).length;
+    const withStats = (data) => ({ data, ...calcStats(data, selectedRecords, selCount) });
+
+    const makeRatios = (V, H1, H2) => {
+      const r1 = [], r2 = [], rc = [];
+      for (let i = 0; i < V.length; i++) {
+        const row1 = Array(records).fill(0);
+        const row2 = Array(records).fill(0);
+        const rowC = Array(records).fill(0);
+        for (let rec = 0; rec < records; rec++) {
+          const v = V[i][rec];
+          if (v > 0) {
+            row1[rec] = Math.pow(H1[i][rec] / v, power);
+            row2[rec] = Math.pow(H2[i][rec] / v, power);
+            rowC[rec] = Math.pow(Math.sqrt(H1[i][rec] * H2[i][rec]) / v, power);
+          }
+        }
+        r1.push(row1); r2.push(row2); rc.push(rowC);
+      }
+      const main = option === 1 ? r1 : (option === 2 ? r2 : rc);
+      return { H1: withStats(r1), H2: withStats(r2), Comb: withStats(rc), Main: withStats(main) };
+    };
+
+    const ratios = {
+      SDOF: makeRatios(sdofV, sdofH1, sdofH2),
+      FFT: makeRatios(fftV, fftH1, fftH2)
+    };
+
+    // Μεμονωμένα φάσματα συνιστωσών: Sv (Z), Sx (X), Sy (Y)
+    const comps = {
+      SDOF: { Z: withStats(sdofV), X: withStats(sdofH1), Y: withStats(sdofH2) },
+      FFT: { Z: withStats(fftV), X: withStats(fftH1), Y: withStats(fftH2) }
+    };
+
+    // Penalty = μέση απόλυτη απόκλιση από τον μέσο όρο μέσα στο εύρος συχνοτήτων
+    const penalties = Array(records).fill(0);
+    const penTarget = ratios[penDomain][penRatio];
+    const freqsTarget = penDomain === 'SDOF' ? sdofFreqs : fftFreqs;
+
+    for (let rec = 0; rec < records; rec++) {
+      let pen = 0, count = 0;
+      for (let i = 0; i < freqsTarget.length; i++) {
+        const f = freqsTarget[i];
+        if (f >= penMinF && f <= penMaxF && penTarget.mean[i] !== undefined) {
+          pen += Math.abs(penTarget.data[i][rec] - penTarget.mean[i]);
+          count++;
+        }
+      }
+      penalties[rec] = count > 0 ? pen / count : 0;
+    }
+
+    return {
+      sdofFreqs, fftFreqs, ratios, comps,
+      sdofV, sdofH1, sdofH2, fftV, fftH1, fftH2,
+      penalties
+    };
+  }, [spectra, fileData, selectedRecords, power, option, penMinF, penMaxF, penDomain, penRatio]);
+
+  const getSeries = (domain, key) => {
+    if (!computedData) return null;
+    return computedData.ratios[domain][key] || computedData.comps[domain][key] || null;
+  };
 
   useEffect(() => {
     setChartMaxX(params.maxfre);
@@ -700,7 +899,7 @@ export default function App() {
     let tsv = "";
     
     let freqs = tableDomain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs;
-    let targetRatioData = computedData.ratios[tableDomain][tableRatio];
+    let targetRatioData = getSeries(tableDomain, tableRatio);
     
     if (!targetRatioData) return;
 
@@ -717,12 +916,12 @@ export default function App() {
     for (let i = 0; i < freqs.length; i++) {
         let row = [
             freqs[i].toFixed(4),
-            meanArr[i].toFixed(4),
-            (meanArr[i] + stdArr[i]).toFixed(4),
-            Math.max(0, meanArr[i] - stdArr[i]).toFixed(4)
+            fmtVal(meanArr[i], 4),
+            fmtVal(meanArr[i] + stdArr[i], 4),
+            fmtVal(Math.max(0, meanArr[i] - stdArr[i]), 4)
         ];
         for (let rec = 0; rec < fileData.records; rec++) {
-            if (selectedRecords[rec]) row.push(data2D[i][rec].toFixed(4));
+            if (selectedRecords[rec]) row.push(fmtVal(data2D[i][rec], 4));
         }
         tsv += row.join("\t") + "\n";
     }
@@ -770,7 +969,7 @@ export default function App() {
     if (!fileData) return [];
     let indices = Array.from({length: fileData.records}, (_, i) => i);
     if (sortByPenalty && computedData?.penalties) {
-      indices.sort((a, b) => computedData.penalties[a] - computedData.penalties[b]); 
+      indices.sort((a, b) => computedData.penalties[b] - computedData.penalties[a]);
     }
     return indices;
   };
@@ -1026,7 +1225,7 @@ export default function App() {
             if (!selectedRecords[rec] || rec === activeRecord) return null;
             const isHovered = hoveredRecord === rec;
             let path = "";
-            for(let i=0; i<params.nspec; i++) {
+            for(let i=0; i<sdofFreqs.length; i++) {
                const x = getX(sdofFreqs[i]);
                const y = getY(hv[i][rec]);
                path += (i===0 ? "M " : " L ") + `${x} ${y}`;
@@ -1066,7 +1265,7 @@ export default function App() {
 
           {displayOpts.showStdDev && displayOpts.showMeanSDOF && (() => {
             let pathPlus = "", pathMinus = "";
-            for(let i=0; i<params.nspec; i++) {
+            for(let i=0; i<sdofFreqs.length; i++) {
                const x = getX(sdofFreqs[i]);
                const yPlus = getY(hvave[i] + hvStd[i]);
                const yMinus = getY(Math.max(1e-10, hvave[i] - hvStd[i]));
@@ -1093,7 +1292,7 @@ export default function App() {
 
           {displayOpts.showMeanSDOF && (() => {
             let path = "";
-            for(let i=0; i<params.nspec; i++) {
+            for(let i=0; i<sdofFreqs.length; i++) {
                const x = getX(sdofFreqs[i]);
                const y = getY(hvave[i]);
                path += (i===0 ? "M " : " L ") + `${x} ${y}`;
@@ -1113,7 +1312,7 @@ export default function App() {
           
           {displayOpts.showActiveSDOF && fileData.records > 0 && activeRecord !== null && selectedRecords[activeRecord] && (() => {
             let path = "";
-            for(let i=0; i<params.nspec; i++) {
+            for(let i=0; i<sdofFreqs.length; i++) {
                const x = getX(sdofFreqs[i]);
                const y = getY(hv[i][activeRecord]);
                path += (i===0 ? "M " : " L ") + `${x} ${y}`;
@@ -1319,8 +1518,8 @@ export default function App() {
                         <input type="checkbox" checked={selectedRecords[i] || false} onChange={(e) => { e.stopPropagation(); toggleRecord(i); }} className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"/>
                         <span className={`text-black font-bold text-sm ${activeRecord === i ? 'text-blue-800' : ''}`}>Rec {i + 1}</span>
                         
-                        <span className="ml-auto text-xs text-black font-bold" title={`Penalty Score: ${penValue.toFixed(2)}`}>
-                           {`[P: ${penValue > 0 ? '+' : ''}${penValue.toFixed(1)}${!selectedRecords[i] ? ' OFF' : ''}]`}
+                        <span className="ml-auto text-xs text-black font-bold" title={`Penalty (μέση απόλυτη απόκλιση από τον μέσο όρο): ${penValue.toFixed(3)}`}>
+                           {`[P: ${penValue.toFixed(2)}${!selectedRecords[i] ? ' OFF' : ''}]`}
                         </span>
                       </div>
                     );
@@ -1346,7 +1545,8 @@ export default function App() {
                 <>
                   {renderTimeSeries()}
                   {renderChart()}
-                  
+                  <SpectraChart computedData={computedData} activeRecord={activeRecord} maxFre={chartMaxX} />
+
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-2 h-[350px]">
                     <HeatmapViewer 
                       computedData={computedData} 
@@ -1379,8 +1579,11 @@ export default function App() {
                              <option value="H1">Sx/Sv</option>
                              <option value="H2">Sy/Sv</option>
                              <option value="Comb">H/V</option>
+                             <option value="X">Sx</option>
+                             <option value="Y">Sy</option>
+                             <option value="Z">Sv</option>
                            </select>
-                           <button 
+                           <button
                              onClick={handleCopyTable}
                              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${tableCopied ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
                            >
@@ -1389,7 +1592,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex-1 overflow-auto">
-                        <table className="w-full text-xs text-right border-collapse">
+                        <table className="w-full text-xs text-right border-collapse whitespace-nowrap">
                           <thead className="bg-slate-100 sticky top-0 shadow-sm z-10">
                             <tr>
                               <th className="p-2 border-b border-slate-200 text-left font-semibold text-slate-700">Freq(Hz)</th>
@@ -1403,17 +1606,17 @@ export default function App() {
                           </thead>
                           <tbody>
                             {(tableDomain === 'SDOF' ? computedData.sdofFreqs : computedData.fftFreqs).map((freq, i) => {
-                              const trData = computedData.ratios[tableDomain][tableRatio];
-                              if (!trData) return null;
+                              const trData = getSeries(tableDomain, tableRatio);
+                              if (!trData || trData.mean[i] === undefined) return null;
                               return (
                                 <tr key={`tr-${i}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                                   <td className="p-2 text-left font-medium text-slate-600">{freq.toFixed(2)}</td>
-                                  <td className="p-2 font-bold text-slate-800">{trData.mean[i].toFixed(2)}</td>
-                                  <td className="p-2 text-slate-500">{(trData.mean[i] + trData.std[i]).toFixed(2)}</td>
-                                  <td className="p-2 text-slate-500">{Math.max(0, trData.mean[i] - trData.std[i]).toFixed(2)}</td>
+                                  <td className="p-2 font-bold text-slate-800">{fmtVal(trData.mean[i])}</td>
+                                  <td className="p-2 text-slate-500">{fmtVal(trData.mean[i] + trData.std[i])}</td>
+                                  <td className="p-2 text-slate-500">{fmtVal(Math.max(0, trData.mean[i] - trData.std[i]))}</td>
                                   {selectedRecords.map((isSelected, recIdx) => isSelected ? (
                                     <td key={`td-${i}-${recIdx}`} className="p-2 text-slate-600">
-                                      {trData.data[i][recIdx].toFixed(2)}
+                                      {fmtVal(trData.data[i][recIdx])}
                                     </td>
                                   ) : null)}
                                 </tr>
