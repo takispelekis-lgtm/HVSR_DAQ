@@ -1080,9 +1080,9 @@ export default function App() {
       chIdx = Math.max(0, Math.min(2, chIdx));
       
       const channels = [
-        { name: `Z (Ch ${params.chV + 1})`, data: sensorData[activeRecord][params.chV] },
-        { name: `X (Ch ${params.chH1 + 1})`, data: sensorData[activeRecord][params.chH1] },
-        { name: `Y (Ch ${params.chH2 + 1})`, data: sensorData[activeRecord][params.chH2] }
+        { name: `Sv (Ch ${params.chV + 1})`, data: sensorData[activeRecord][params.chV] },
+        { name: `Sx (Ch ${params.chH1 + 1})`, data: sensorData[activeRecord][params.chH1] },
+        { name: `Sy (Ch ${params.chH2 + 1})`, data: sensorData[activeRecord][params.chH2] }
       ];
       
       const pIdx = Math.floor((time / tr) * npoints);
@@ -1130,9 +1130,9 @@ export default function App() {
     const { npoints, sensorData } = fileData;
     
     const channels = [
-      { name: `Z / Vertical (Ch ${params.chV + 1})`, data: sensorData[activeRecord][params.chV], color: "#57534e" },
-      { name: `X / Horizontal 1 (Ch ${params.chH1 + 1})`, data: sensorData[activeRecord][params.chH1], color: "#0284c7" },
-      { name: `Y / Horizontal 2 (Ch ${params.chH2 + 1})`, data: sensorData[activeRecord][params.chH2], color: "#dc2626" }
+      { name: `Sv / Vertical (Ch ${params.chV + 1})`, data: sensorData[activeRecord][params.chV], color: "#57534e" },
+      { name: `Sx / Horizontal (Ch ${params.chH1 + 1})`, data: sensorData[activeRecord][params.chH1], color: "#0284c7" },
+      { name: `Sy / Horizontal (Ch ${params.chH2 + 1})`, data: sensorData[activeRecord][params.chH2], color: "#dc2626" }
     ];
 
     return (
@@ -1481,19 +1481,19 @@ export default function App() {
                      <label className="block text-slate-700 font-semibold mb-2 text-xs">Channel Mapping</label>
                      <div className="grid grid-cols-3 gap-2 text-xs">
                        <div>
-                         <label className="block text-slate-500 mb-1">Z (Vert)</label>
+                         <label className="block text-slate-500 mb-1">Sv (vert.)</label>
                          <select name="chV" value={params.chV} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
                            {Array.from({length: numChannels}).map((_, i) => <option key={`v-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
                        </div>
                        <div>
-                         <label className="block text-slate-500 mb-1">X (Hor 1)</label>
+                         <label className="block text-slate-500 mb-1">Sx (hor.)</label>
                          <select name="chH1" value={params.chH1} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
                            {Array.from({length: numChannels}).map((_, i) => <option key={`h1-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
                        </div>
                        <div>
-                         <label className="block text-slate-500 mb-1">Y (Hor 2)</label>
+                         <label className="block text-slate-500 mb-1">Sy (hor.)</label>
                          <select name="chH2" value={params.chH2} onChange={handleParamChange} className="w-full border border-slate-300 p-1 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
                            {Array.from({length: numChannels}).map((_, i) => <option key={`h2-${i}`} value={i}>Ch {i+1}</option>)}
                          </select>
@@ -1522,7 +1522,7 @@ export default function App() {
                   <input type="number" step="0.01" name="dratio" value={params.dratio} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" />
                 </div>
                 <div>
-                  <label className="block text-slate-600 font-medium mb-1">Horiz. Gain</label>
+                  <label className="block text-slate-600 font-medium mb-1">Sx, Sy Gain</label>
                   <input type="number" min="1" max="4" step="0.1" name="horGain" value={params.horGain} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" />
                 </div>
                 <div className="col-span-1 pt-2 border-t border-slate-100">
@@ -1547,9 +1547,9 @@ export default function App() {
                 <div className="col-span-2">
                   <label className="block text-slate-600 font-medium mb-1">Combination Method (Main Plot)</label>
                   <select name="option" value={params.option} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
-                    <option value={1}>(H1 / V)^p</option>
-                    <option value={2}>(H2 / V)^p</option>
-                    <option value={3}>(sqrt(H1*H2) / V)^p</option>
+                    <option value={1}>(Sx / Sv)^p</option>
+                    <option value={2}>(Sy / Sv)^p</option>
+                    <option value={3}>(sqrt(Sx·Sy) / Sv)^p</option>
                   </select>
                 </div>
               </div>

@@ -16,7 +16,7 @@ export const TABLE_OPTIONS = [
 ];
 
 const DOMAIN_COLORS = { SDOF: '2563EB', FFT: '059669' };
-const COMBINATION_LABELS = { 1: '(Sx / Sv)^p', 2: '(Sy / Sv)^p', 3: '(sqrt(Sx*Sy) / Sv)^p' };
+const COMBINATION_LABELS = { 1: '(Sx / Sv)^p', 2: '(Sy / Sv)^p', 3: '(sqrt(Sx·Sy) / Sv)^p' };
 
 // Sheet layout: summary in A:D, chart over F:P, individual records from column R
 const RECORDS_FIRST_COL = 17;
@@ -106,13 +106,13 @@ function infoSheet({ fileName, fileData, params, computedData, selectedRecords }
     [label('Points per record'), fileData.npoints],
     [label('dt (s)'), params.dt],
     [label('Duration (s)'), Number((fileData.npoints * params.dt).toFixed(6))],
-    [label('Vertical channel (Sv)'), `Ch ${params.chV + 1}`],
-    [label('Horizontal 1 channel (Sx)'), `Ch ${params.chH1 + 1}`],
-    [label('Horizontal 2 channel (Sy)'), `Ch ${params.chH2 + 1}`],
+    [label('Sv channel (vertical)'), `Ch ${params.chV + 1}`],
+    [label('Sx channel (horizontal)'), `Ch ${params.chH1 + 1}`],
+    [label('Sy channel (horizontal)'), `Ch ${params.chH2 + 1}`],
     [label('Max frequency (Hz)'), Number(params.maxfre)],
     [label('SDOF spectral points'), Number(params.nspec)],
     [label('Damping ratio'), Number(params.dratio)],
-    [label('Horizontal gain (SDOF)'), Number(params.horGain)],
+    [label('Sx, Sy gain (SDOF)'), Number(params.horGain)],
     [label('SDOF input'), params.sdofInput === 'acceleration' ? 'Acceleration (derivative)' : 'Velocity'],
     [label('FFT window'), params.windowType === 'None' ? 'Rectangular' : params.windowType],
     [label('FFT smoothing (points)'), Number(params.fftSmoothWindow)],
