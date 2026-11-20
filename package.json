@@ -4,8 +4,7 @@
   "version": "0.0.0",
   "homepage": "https://takispelekis-lgtm.github.io/HVSR_DAQ",
   "type": "module",
-
-"scripts": {
+  "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
@@ -14,6 +13,7 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "fflate": "^0.8.2",
     "lucide-react": "^1.7.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Upload, Settings, Activity, LineChart, FileText, ChevronLeft, ChevronRight, Eye, Grid, Table, Copy, Check, AlertTriangle } from 'lucide-react';
+import { Upload, Settings, Activity, LineChart, FileText, ChevronLeft, ChevronRight, Eye, Grid, Table, Copy, Check, AlertTriangle, FileSpreadsheet, FolderOpen } from 'lucide-react';
+import { buildHvsrWorkbook, getSeries as getSeriesFrom, TABLE_OPTIONS } from './hvsrExport.js';
+import { XLSX_MIME } from './xlsxWriter.js';
 
 // --- ΥΠΟΛΟΓΙΣΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ---
 
@@ -475,7 +477,7 @@ const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
       <div className="flex flex-wrap items-center justify-between p-3 gap-2 bg-slate-50 border-b border-slate-200">
         <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
           <LineChart className="w-4 h-4 text-blue-600" />
-          Φάσματα Συνιστωσών (Sx, Sy, Sv)
+          Component Spectra (Sx, Sy, Sv)
         </h3>
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <select
@@ -499,7 +501,7 @@ const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
           ))}
           <label className="flex items-center gap-1 cursor-pointer font-bold text-slate-700">
             <input type="checkbox" checked={showActive} onChange={(e) => setShowActive(e.target.checked)} />
-            Ενεργό Record
+            Active Record
           </label>
           <label className="flex items-center gap-1 cursor-pointer font-bold text-slate-700">
             <input type="checkbox" checked={showStd} onChange={(e) => setShowStd(e.target.checked)} />
@@ -529,7 +531,7 @@ const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
         ))}
 
         <text x="14" y={height / 2} fontSize="15" transform={`rotate(-90, 14, ${height / 2})`} textAnchor="middle" fill="#666" fontWeight="500">
-          Φασματικό Πλάτος {logY ? '(Log)' : ''}
+          Spectral Amplitude {logY ? '(Log)' : ''}
         </text>
         <text x={width / 2} y={height - 8} fontSize="15" textAnchor="middle" fill="#666" fontWeight="500">
           Frequency (Hz)
@@ -569,7 +571,7 @@ const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
         )}
       </svg>
       <div className="px-3 pb-2 text-[11px] text-slate-500">
-        Συνεχής γραμμή: μέσος όρος επιλεγμένων καταγραφών · Διακεκομμένη: ενεργή καταγραφή{hasActive ? ` (Record ${activeRecord + 1})` : ''}
+        Solid line: mean of selected records · Dashed: active record{hasActive ? ` (Record ${activeRecord + 1})` : ''}
       </div>
     </div>
   );
@@ -616,6 +618,10 @@ export default function App() {
   const [tableDomain, setTableDomain] = useState('SDOF'); 
   const [tableRatio, setTableRatio] = useState('Comb'); 
   const [tableCopied, setTableCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState(null);
+  const fileInputRef = useRef(null);
+  const csvHandleRef = useRef(null);
 
   const [tsCursor, setTsCursor] = useState(null);
   const [chartCursor, setChartCursor] = useState(null);
@@ -630,10 +636,39 @@ export default function App() {
     showStdDev: false
   });
 
+  // Άνοιγμα CSV: σε Chrome/Edge με showOpenFilePicker ώστε να κρατάμε το handle του αρχείου
+  // (το export xlsx ανοίγει μετά στον ίδιο φάκελο). Αλλιώς κλασικό <input type="file">.
+  const handleOpenCsv = async () => {
+    if (!window.showOpenFilePicker) {
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: 'CSV files', accept: { 'text/csv': ['.csv'] } }]
+      });
+      const file = await handle.getFile();
+      csvHandleRef.current = handle;
+      loadCsvFile(file);
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      console.error(err);
+      setErrorMsg("Could not open the file: " + (err?.message || err));
+    }
+  };
+
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
-    
+    csvHandleRef.current = null;
+    loadCsvFile(file);
+  };
+
+  const loadCsvFile = (file) => {
+    setExportStatus(null);
+
     // --- FULL RESET ΥΠΟΛΟΙΠΩΝ STATES (Για να μην μένουν σκουπίδια από προηγούμενο αρχείο) ---
     setFileName(file.name);
     setLoading(true);
@@ -674,14 +709,14 @@ export default function App() {
         }
 
         if (firstLineTokens.length === 0) {
-            throw new Error("Δεν βρέθηκαν έγκυρα αριθμητικά δεδομένα στο αρχείο.");
+            throw new Error("No valid numeric data found in the file.");
         }
 
         const columns = firstLineTokens.length;
         const recordsFromData = Math.floor((columns - 2) / 12);
 
         if (recordsFromData <= 0) {
-            throw new Error(`Αδυναμία υπολογισμού καταγραφών. Βρέθηκαν συνολικά ${columns} στήλες στο αρχείο.`);
+            throw new Error(`Could not determine the number of records. The file has ${columns} columns in total.`);
         }
 
         const records = recordsFromData;
@@ -713,7 +748,7 @@ export default function App() {
         }
 
         if (parsedLinesCount === 0) {
-            throw new Error("Το αρχείο είναι άδειο ή η δομή του δεν διαβάστηκε σωστά.");
+            throw new Error("The file is empty or its structure could not be read.");
         }
         
         // BASELINE CORRECTION (Αφαίρεση Μέσης Τιμής για την αποφυγή Low Freq Blow-up στο SDOF)
@@ -744,7 +779,7 @@ export default function App() {
         setLoading(false);
       } catch (err) {
         console.error(err);
-        setErrorMsg("Σφάλμα: " + err.message);
+        setErrorMsg("Error: " + err.message);
         setLoading(false);
       }
     };
@@ -885,9 +920,60 @@ export default function App() {
     };
   }, [spectra, fileData, selectedRecords, power, option, penMinF, penMaxF, penDomain, penRatio]);
 
-  const getSeries = (domain, key) => {
-    if (!computedData) return null;
-    return computedData.ratios[domain][key] || computedData.comps[domain][key] || null;
+  const getSeries = (domain, key) => getSeriesFrom(computedData, domain, key);
+
+  // --- EXPORT XLSX: ένα φύλλο ανά επιλογή του πίνακα δεδομένων, με γράφημα mean ± 1σ ---
+  // Σε Chrome/Edge ανοίγει παράθυρο αποθήκευσης στον φάκελο του CSV (File System Access API).
+  // Σε άλλους browsers γίνεται απλό download.
+  const handleExportXlsx = async () => {
+    if (!computedData || !fileData || exporting) return;
+    const baseName = (fileName || 'hvsr').replace(/\.[^.]+$/, '');
+    const suggestedName = `${baseName}_HVSR.xlsx`;
+    let writable = null;
+    let savedName = suggestedName;
+    setExportStatus(null);
+    try {
+      if (window.showSaveFilePicker) {
+        const pickerOpts = {
+          suggestedName,
+          types: [{ description: 'Excel workbook', accept: { [XLSX_MIME]: ['.xlsx'] } }]
+        };
+        if (csvHandleRef.current) pickerOpts.startIn = csvHandleRef.current;
+        const handle = await window.showSaveFilePicker(pickerOpts);
+        savedName = handle.name;
+        writable = await handle.createWritable();
+      }
+      setExporting(true);
+      await new Promise(r => setTimeout(r, 0));
+
+      const bytes = buildHvsrWorkbook({
+        fileName, fileData, params, computedData, selectedRecords,
+        activeDomain: tableDomain, activeKey: tableRatio
+      });
+
+      if (writable) {
+        await writable.write(bytes);
+        await writable.close();
+        setExportStatus({ ok: true, text: `Saved ${savedName}` });
+      } else {
+        const url = URL.createObjectURL(new Blob([bytes], { type: XLSX_MIME }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = suggestedName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        setExportStatus({ ok: true, text: `Downloaded ${suggestedName}` });
+      }
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      console.error(err);
+      if (writable) { try { await writable.abort(); } catch { /* ignore */ } }
+      setExportStatus({ ok: false, text: `Export failed: ${err?.message || err}` });
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -907,7 +993,7 @@ export default function App() {
     let stdArr = targetRatioData.std;
     let data2D = targetRatioData.data;
 
-    let headers = ["Freq(Hz)", "MO", "+1σ", "-1σ"];
+    let headers = ["Freq(Hz)", "Mean", "+1σ", "-1σ"];
     fileData.sensorData.forEach((_, i) => {
         if (selectedRecords[i]) headers.push(`R ${i + 1}`);
     });
@@ -1085,7 +1171,7 @@ export default function App() {
           );
         })}
         <text x={width/2} y={height - 10} fontSize="14" textAnchor="middle" fill="#666" fontWeight="500">
-          Χρόνος (sec) — Record {activeRecord + 1}
+          Time (s) — Record {activeRecord + 1}
         </text>
 
         {tsCursor && (
@@ -1169,7 +1255,7 @@ export default function App() {
             value={chartMaxY}
             onChange={(e) => setChartMaxY(e.target.value === '' ? '' : Number(e.target.value))}
             className="w-full h-full text-right text-[14px] font-medium text-blue-700 bg-blue-50/80 border border-transparent hover:border-blue-300 focus:border-blue-500 focus:bg-white rounded outline-none p-0 cursor-text"
-            title="Αλλαγή Μέγιστου Y"
+            title="Change Y maximum"
           />
         </foreignObject>
 
@@ -1179,7 +1265,7 @@ export default function App() {
             value={chartMaxX}
             onChange={(e) => setChartMaxX(e.target.value === '' ? '' : Number(e.target.value))}
             className="w-full h-full text-center text-[14px] font-medium text-blue-700 bg-blue-50/80 border border-transparent hover:border-blue-300 focus:border-blue-500 focus:bg-white rounded outline-none p-0 cursor-text"
-            title="Αλλαγή Οπτικής Κλίμακας (X)"
+            title="Change X axis range"
           />
         </foreignObject>
         
@@ -1329,7 +1415,7 @@ export default function App() {
 
         {hoveredRecord !== null && !chartCursor && (
           <text x={width - padding - 15} y={padding + 12} fontSize="14" fill="#475569" fontWeight="bold" textAnchor="end">
-            Αναγνώριση: Record {hoveredRecord + 1}
+            Hover: Record {hoveredRecord + 1}
           </text>
         )}
 
@@ -1358,7 +1444,7 @@ export default function App() {
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5" />
               <div>
-                <h3 className="text-sm font-bold text-red-800">Πρόβλημα Ανάγνωσης</h3>
+                <h3 className="text-sm font-bold text-red-800">File Read Error</h3>
                 <p className="text-sm text-red-700 mt-1">{errorMsg}</p>
               </div>
             </div>
@@ -1375,13 +1461,13 @@ export default function App() {
             
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
               <h3 className="font-semibold text-sm flex items-center gap-2 mb-3 text-slate-800">
-                <Upload className="w-4 h-4" /> Δεδομένα
+                <Upload className="w-4 h-4" /> Data
               </h3>
-              <label className="block w-full cursor-pointer bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors py-1.5 px-3 rounded text-center text-sm font-medium border border-blue-200">
-                Επιλογή CSV...
-                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-              </label>
-              {fileName && <p className="text-xs text-slate-500 mt-2 truncate">Αρχείο: {fileName}</p>}
+              <button type="button" onClick={handleOpenCsv} className="flex items-center justify-center gap-1.5 w-full cursor-pointer bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors py-1.5 px-3 rounded text-center text-sm font-medium border border-blue-200">
+                <FolderOpen className="w-4 h-4" /> Open CSV...
+              </button>
+              <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+              {fileName && <p className="text-xs text-slate-500 mt-2 truncate">File: {fileName}</p>}
               
               {fileData && (
                 <>
@@ -1392,7 +1478,7 @@ export default function App() {
                   </div>
                   
                   <div className="mt-3 pt-3 border-t border-slate-200">
-                     <label className="block text-slate-700 font-semibold mb-2 text-xs">Αντιστοίχιση Καναλιών</label>
+                     <label className="block text-slate-700 font-semibold mb-2 text-xs">Channel Mapping</label>
                      <div className="grid grid-cols-3 gap-2 text-xs">
                        <div>
                          <label className="block text-slate-500 mb-1">Z (Vert)</label>
@@ -1420,12 +1506,12 @@ export default function App() {
 
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                <h3 className="font-semibold text-sm flex items-center gap-2 mb-3 text-slate-800">
-                <Settings className="w-4 h-4" /> Υπολογισμοί
+                <Settings className="w-4 h-4" /> Processing
               </h3>
               <div className="grid grid-cols-2 gap-x-3 gap-y-3 text-xs">
                 <div>
                   <label className="block text-slate-600 font-medium mb-1">Max Freq (Hz)</label>
-                  <input type="number" name="maxfre" value={params.maxfre} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" title="Όριο συχνοτήτων" />
+                  <input type="number" name="maxfre" value={params.maxfre} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" title="Frequency limit" />
                 </div>
                 <div>
                   <label className="block text-slate-600 font-medium mb-1">Spec Points</label>
@@ -1448,10 +1534,10 @@ export default function App() {
                   </select>
                 </div>
                 <div className="col-span-1 pt-2 border-t border-slate-100">
-                  <label className="block text-slate-600 font-medium mb-1">Είσοδος SDOF</label>
+                  <label className="block text-slate-600 font-medium mb-1">SDOF Input</label>
                   <select name="sdofInput" value={params.sdofInput} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
-                    <option value="velocity">Ταχύτητες</option>
-                    <option value="acceleration">Επιταχύνσεις</option>
+                    <option value="velocity">Velocity</option>
+                    <option value="acceleration">Acceleration</option>
                   </select>
                 </div>
                 <div className="col-span-2">
@@ -1459,7 +1545,7 @@ export default function App() {
                   <input type="number" min="1" step="2" name="fftSmoothWindow" value={params.fftSmoothWindow} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-slate-600 font-medium mb-1">Μέθοδος Συνδυασμού (Main Plot)</label>
+                  <label className="block text-slate-600 font-medium mb-1">Combination Method (Main Plot)</label>
                   <select name="option" value={params.option} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
                     <option value={1}>(H1 / V)^p</option>
                     <option value={2}>(H2 / V)^p</option>
@@ -1472,19 +1558,19 @@ export default function App() {
             {fileData && (
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col flex-1 max-h-[500px]">
                 <div className="flex justify-between items-center mb-2">
-                  <h3 className="font-semibold text-sm">Επιλογή Καταγραφών</h3>
+                  <h3 className="font-semibold text-sm">Record Selection</h3>
                   <button onClick={() => setSelectedRecords(Array(fileData.records).fill(true))} className="text-[10px] bg-slate-100 px-2 py-1 rounded text-blue-600 hover:bg-slate-200 transition-colors">
-                    Επιλογή Όλων
+                    Select All
                   </button>
                 </div>
                 
                 <div className="mb-2 p-2 bg-slate-50 border border-slate-100 rounded text-xs flex flex-col gap-2">
                   <div>
-                     <div className="font-medium text-slate-700 mb-1">Εύρος Penalty (Hz)</div>
+                     <div className="font-medium text-slate-700 mb-1">Penalty Range (Hz)</div>
                      <div className="flex gap-2 items-center">
-                       <input type="number" name="penMinF" value={params.penMinF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Από (Hz)" />
+                       <input type="number" name="penMinF" value={params.penMinF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="From (Hz)" />
                        <span className="text-slate-500">-</span>
-                       <input type="number" name="penMaxF" value={params.penMaxF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="Έως (Hz)" />
+                       <input type="number" name="penMaxF" value={params.penMaxF} onChange={handleParamChange} step="0.1" className="w-14 border border-slate-300 p-1 rounded outline-none" title="To (Hz)" />
                      </div>
                   </div>
                   <div className="flex gap-2 items-center">
@@ -1500,7 +1586,7 @@ export default function App() {
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer mt-1 hover:text-blue-700">
                     <input type="checkbox" checked={sortByPenalty} onChange={(e) => setSortByPenalty(e.target.checked)} className="rounded text-blue-600 cursor-pointer" />
-                    <span className="font-medium">Ταξινόμηση (Χειρότερα Πρώτα)</span>
+                    <span className="font-medium">Sort (Worst First)</span>
                   </label>
                 </div>
 
@@ -1518,7 +1604,7 @@ export default function App() {
                         <input type="checkbox" checked={selectedRecords[i] || false} onChange={(e) => { e.stopPropagation(); toggleRecord(i); }} className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"/>
                         <span className={`text-black font-bold text-sm ${activeRecord === i ? 'text-blue-800' : ''}`}>Rec {i + 1}</span>
                         
-                        <span className="ml-auto text-xs text-black font-bold" title={`Penalty (μέση απόλυτη απόκλιση από τον μέσο όρο): ${penValue.toFixed(3)}`}>
+                        <span className="ml-auto text-xs text-black font-bold" title={`Penalty (mean absolute deviation from the mean): ${penValue.toFixed(3)}`}>
                            {`[P: ${penValue.toFixed(2)}${!selectedRecords[i] ? ' OFF' : ''}]`}
                         </span>
                       </div>
@@ -1539,7 +1625,7 @@ export default function App() {
               ) : !computedData ? (
                 <div className="h-[700px] flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50 text-slate-400">
                   <FileText className="w-16 h-16 mb-4 opacity-40 text-slate-400" />
-                  <p className="text-base font-medium text-slate-500">Φορτώστε ένα αρχείο CSV για να ξεκινήσετε</p>
+                  <p className="text-base font-medium text-slate-500">Load a CSV file to get started</p>
                 </div>
               ) : (
                 <>
@@ -1560,7 +1646,7 @@ export default function App() {
                       <div className="flex items-center justify-between p-3 bg-slate-50 border-b border-slate-200">
                         <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
                           <Table className="w-4 h-4 text-blue-600" />
-                          Πίνακας Δεδομένων
+                          Data Table
                         </h3>
                         <div className="flex items-center gap-2">
                            <select 
@@ -1576,27 +1662,36 @@ export default function App() {
                              onChange={(e) => setTableRatio(e.target.value)}
                              className="border border-slate-300 text-xs rounded p-1 outline-none bg-white"
                            >
-                             <option value="H1">Sx/Sv</option>
-                             <option value="H2">Sy/Sv</option>
-                             <option value="Comb">H/V</option>
-                             <option value="X">Sx</option>
-                             <option value="Y">Sy</option>
-                             <option value="Z">Sv</option>
+                             {TABLE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                            </select>
                            <button
                              onClick={handleCopyTable}
                              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${tableCopied ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
                            >
-                             {tableCopied ? <><Check size={14} /> Έγινε!</> : <><Copy size={14} /> Αντιγραφή</>}
+                             {tableCopied ? <><Check size={14} /> Copied!</> : <><Copy size={14} /> Copy</>}
+                           </button>
+                           <button
+                             onClick={handleExportXlsx}
+                             disabled={exporting}
+                             title="Save an .xlsx in the CSV folder: one sheet per table option (SDOF/FFT × Sx/Sv, Sy/Sv, H/V, Sx, Sy, Sv), each with a mean ± 1σ chart"
+                             className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors bg-emerald-100 text-emerald-800 hover:bg-emerald-200 disabled:opacity-60 disabled:cursor-wait"
+                           >
+                             <FileSpreadsheet size={14} /> {exporting ? 'Exporting...' : 'Export XLSX'}
                            </button>
                         </div>
                       </div>
+                      {exportStatus && (
+                        <div className={`px-3 py-1.5 text-xs border-b flex justify-between items-center ${exportStatus.ok ? 'bg-emerald-50 text-emerald-800 border-emerald-100' : 'bg-red-50 text-red-700 border-red-100'}`}>
+                          <span className="truncate">{exportStatus.text}</span>
+                          <button onClick={() => setExportStatus(null)} className="ml-2 opacity-60 hover:opacity-100">&times;</button>
+                        </div>
+                      )}
                       <div className="flex-1 overflow-auto">
                         <table className="w-full text-xs text-right border-collapse whitespace-nowrap">
                           <thead className="bg-slate-100 sticky top-0 shadow-sm z-10">
                             <tr>
                               <th className="p-2 border-b border-slate-200 text-left font-semibold text-slate-700">Freq(Hz)</th>
-                              <th className="p-2 border-b border-slate-200 font-bold text-slate-800">MO</th>
+                              <th className="p-2 border-b border-slate-200 font-bold text-slate-800">Mean</th>
                               <th className="p-2 border-b border-slate-200 font-semibold text-slate-600">+1σ</th>
                               <th className="p-2 border-b border-slate-200 font-semibold text-slate-600">-1σ</th>
                               {selectedRecords.map((isSelected, i) => isSelected ? (
@@ -1637,7 +1732,7 @@ export default function App() {
              
              {fileData && (
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                <h3 className="font-semibold text-sm flex items-center gap-2 mb-3 text-slate-800">Πλοήγηση Καταγραφών</h3>
+                <h3 className="font-semibold text-sm flex items-center gap-2 mb-3 text-slate-800">Record Navigation</h3>
                 <div className="flex items-center justify-between bg-slate-100 p-2 rounded-lg border border-slate-200">
                   <button onClick={handlePrevRecord} disabled={activeRecord === null || activeRecord === 0} className="p-1.5 bg-white rounded shadow-sm hover:bg-slate-50 disabled:opacity-50 text-slate-700 transition-colors">
                     <ChevronLeft size={20} />
@@ -1655,14 +1750,14 @@ export default function App() {
              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex-1">
                <div className="flex items-center justify-between mb-4">
                  <h3 className="font-semibold text-sm flex items-center gap-2 text-slate-800">
-                  <Eye className="w-4 h-4" /> Επιλογές Σχεδίασης
+                  <Eye className="w-4 h-4" /> Display Options
                  </h3>
                </div>
 
                <div className="space-y-3">
                  <label className="flex items-center gap-3 p-2 bg-slate-50 border border-slate-100 rounded cursor-pointer hover:bg-slate-100 transition-colors">
                     <input type="checkbox" checked={chartScale === 'log'} onChange={(e) => setChartScale(e.target.checked ? 'log' : 'linear')} className="rounded text-blue-600 w-4 h-4" />
-                    <span className="text-sm font-medium text-slate-700">Λογαριθμική Κλίμακα Y</span>
+                    <span className="text-sm font-medium text-slate-700">Logarithmic Y Scale</span>
                  </label>
 
                  <hr className="border-slate-100 my-2" />
@@ -1670,13 +1765,13 @@ export default function App() {
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showMeanSDOF} onChange={() => handleDisplayOptToggle('showMeanSDOF')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 bg-blue-600 rounded-full"></div>
-                    <span className="text-sm text-slate-700 font-medium">Μέσος Όρος (SDOF)</span>
+                    <span className="text-sm text-slate-700 font-medium">Mean (SDOF)</span>
                  </label>
 
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showMeanFFT} onChange={() => handleDisplayOptToggle('showMeanFFT')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 bg-emerald-500 rounded-full"></div>
-                    <span className="text-sm text-slate-700 font-medium">Μέσος Όρος (FFT)</span>
+                    <span className="text-sm text-slate-700 font-medium">Mean (FFT)</span>
                  </label>
 
                  <label className="flex items-center gap-3 p-2 bg-slate-50 border border-slate-100 rounded cursor-pointer hover:bg-slate-100 transition-colors mt-2">
@@ -1689,30 +1784,30 @@ export default function App() {
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showActiveSDOF} onChange={() => handleDisplayOptToggle('showActiveSDOF')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 bg-[#f97316] rounded-full"></div>
-                    <span className="text-sm text-slate-700 font-medium">Ενεργό Record (SDOF)</span>
+                    <span className="text-sm text-slate-700 font-medium">Active Record (SDOF)</span>
                  </label>
 
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showActiveFFT} onChange={() => handleDisplayOptToggle('showActiveFFT')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 border-b-2 border-dashed border-yellow-500"></div>
-                    <span className="text-sm text-slate-700 font-medium">Ενεργό Record (FFT)</span>
+                    <span className="text-sm text-slate-700 font-medium">Active Record (FFT)</span>
                  </label>
 
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showAllSDOF} onChange={() => handleDisplayOptToggle('showAllSDOF')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 bg-blue-300 rounded-full"></div>
-                    <span className="text-sm text-slate-700 font-medium">Υπόλοιπα SDOF</span>
+                    <span className="text-sm text-slate-700 font-medium">Other Records (SDOF)</span>
                  </label>
 
                  <label className="flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 rounded transition-colors">
                     <input type="checkbox" checked={displayOpts.showAllFFT} onChange={() => handleDisplayOptToggle('showAllFFT')} className="rounded text-blue-600 w-4 h-4" />
                     <div className="w-5 h-1 bg-emerald-300 rounded-full"></div>
-                    <span className="text-sm text-slate-700 font-medium">Υπόλοιπα FFT</span>
+                    <span className="text-sm text-slate-700 font-medium">Other Records (FFT)</span>
                  </label>
                </div>
                
                <div className="mt-4 text-[11px] text-slate-500 bg-blue-50/50 p-2.5 rounded border border-blue-100">
-                  💡 <strong>Tip:</strong> Κάνε κλικ πάνω σε οποιαδήποτε αχνή γραμμή (SDOF ή FFT) στο γράφημα για να την απενεργοποιήσεις και να την αφαιρέσεις από τον μέσο όρο.
+                  💡 <strong>Tip:</strong> Click any faint line (SDOF or FFT) on the chart to deselect that record and remove it from the mean.
                </div>
              </div>
 
