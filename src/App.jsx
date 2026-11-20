@@ -134,10 +134,34 @@ function getDerivative(data, dt) {
   const n = data.length;
   const out = new Float32Array(n);
   if (n === 0) return out;
-  out[0] = 0; 
+  out[0] = 0;
   for (let i = 1; i < n; i++) {
     out[i] = (data[i] - data[i - 1]) / dt;
   }
+  return out;
+}
+
+// Baseline correction: 'mean' αφαιρεί μόνο το offset, 'linear' και τη γραμμική τάση (least squares).
+// Ο χρόνος κεντράρεται στο μέσο του σήματος ώστε οι συντελεστές να υπολογίζονται ανεξάρτητα και με ακρίβεια.
+function removeBaseline(data, mode) {
+  const n = data.length;
+  const out = new Float32Array(n);
+  if (n === 0) return out;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += data[i];
+  mean /= n;
+  let slope = 0;
+  const tc = (n - 1) / 2;
+  if (mode === 'linear' && n > 1) {
+    let stx = 0, stt = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i - tc;
+      stx += t * (data[i] - mean);
+      stt += t * t;
+    }
+    slope = stx / stt;
+  }
+  for (let i = 0; i < n; i++) out[i] = data[i] - mean - slope * (i - tc);
   return out;
 }
 
@@ -580,7 +604,8 @@ const SpectraChart = ({ computedData, activeRecord, maxFre }) => {
 
 // --- MAIN APP COMPONENT ---
 export default function App() {
-  const [fileData, setFileData] = useState(null);
+  // Τα δεδομένα όπως διαβάστηκαν από το CSV (χωρίς διόρθωση)· το fileData παρακάτω είναι η διορθωμένη εκδοχή
+  const [loadedFile, setLoadedFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -602,8 +627,18 @@ export default function App() {
     penMinF: 0.5,
     penMaxF: 10.0,
     penDomain: 'SDOF',
-    penRatio: 'Comb'
+    penRatio: 'Comb',
+    baseline: 'linear'
   });
+
+  // Baseline correction σε όλα τα κανάλια, πριν από φάσματα, κυματομορφές και export
+  const fileData = useMemo(() => {
+    if (!loadedFile) return null;
+    return {
+      ...loadedFile,
+      sensorData: loadedFile.rawData.map(channels => channels.map(ch => removeBaseline(ch, params.baseline)))
+    };
+  }, [loadedFile, params.baseline]);
 
   const [selectedRecords, setSelectedRecords] = useState([]);
   const [activeRecord, setActiveRecord] = useState(null); 
@@ -673,7 +708,7 @@ export default function App() {
     setFileName(file.name);
     setLoading(true);
     setErrorMsg("");
-    setFileData(null);
+    setLoadedFile(null);
     setSpectra(null);
     setSelectedRecords([]);
     setActiveRecord(null);
@@ -751,19 +786,7 @@ export default function App() {
             throw new Error("The file is empty or its structure could not be read.");
         }
         
-        // BASELINE CORRECTION (Αφαίρεση Μέσης Τιμής για την αποφυγή Low Freq Blow-up στο SDOF)
-        for (let rec = 0; rec < records; rec++) {
-          for (let ch = 0; ch < channelsPerRecord; ch++) {
-            let sum = 0;
-            for (let i = 0; i < npoints; i++) {
-              sum += sensorData[rec][ch][i];
-            }
-            const mean = sum / npoints;
-            for (let i = 0; i < npoints; i++) {
-              sensorData[rec][ch][i] -= mean;
-            }
-          }
-        }
+        // Το baseline correction εφαρμόζεται στο fileData (useMemo), ώστε να αλλάζει χωρίς νέο φόρτωμα
 
         setParams(p => {
             let newParams = { ...p, dt: dt };
@@ -773,7 +796,7 @@ export default function App() {
             return newParams;
         });
 
-        setFileData({ records, npoints, sensorData, channelsPerRecord });
+        setLoadedFile({ records, npoints, rawData: sensorData, channelsPerRecord });
         setSelectedRecords(Array(records).fill(true));
         setActiveRecord(0);
         setLoading(false);
@@ -1540,9 +1563,16 @@ export default function App() {
                     <option value="acceleration">Acceleration</option>
                   </select>
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1">
                   <label className="block text-slate-600 font-medium mb-1">FFT Smooth (Pts)</label>
                   <input type="number" min="1" step="2" name="fftSmoothWindow" value={params.fftSmoothWindow} onChange={handleParamChange} className="w-full border border-slate-300 p-1.5 rounded focus:ring-1 focus:ring-blue-400 outline-none" />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-slate-600 font-medium mb-1" title="Removed from every channel before SDOF, FFT and the waveform plot">Baseline</label>
+                  <select name="baseline" value={params.baseline} onChange={handleParamChange} title="Mean: removes the DC offset. Linear trend: removes offset + linear drift (least squares)." className="w-full border border-slate-300 p-1.5 rounded bg-white focus:ring-1 focus:ring-blue-400 outline-none">
+                    <option value="mean">Mean</option>
+                    <option value="linear">Linear trend</option>
+                  </select>
                 </div>
                 <div className="col-span-2">
                   <label className="block text-slate-600 font-medium mb-1">Combination Method (Main Plot)</label>

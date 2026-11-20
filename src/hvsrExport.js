@@ -106,6 +106,7 @@ function infoSheet({ fileName, fileData, params, computedData, selectedRecords }
     [label('Points per record'), fileData.npoints],
     [label('dt (s)'), params.dt],
     [label('Duration (s)'), Number((fileData.npoints * params.dt).toFixed(6))],
+    [label('Baseline correction'), params.baseline === 'linear' ? 'Linear trend (offset + slope)' : 'Mean (offset only)'],
     [label('Sv channel (vertical)'), `Ch ${params.chV + 1}`],
     [label('Sx channel (horizontal)'), `Ch ${params.chH1 + 1}`],
     [label('Sy channel (horizontal)'), `Ch ${params.chH2 + 1}`],
